@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Your smart account</title>
+  <meta name="theme-color" content="#B85A3A" />
+  <script>try{localStorage.getItem('v1w-theme')=='light'&&(document.documentElement.dataset.theme='light',document.querySelector('meta[name=theme-color]').content='#E8D4C8')}catch{}</script>
+  <meta name="description" content="Wallet for your Blacksmith V1 account on Ethereum, Base, or both. Your wallet already has one. Blacksmith never had the keys. The page can be stored on Ethereum and Base." />
+  <link rel="stylesheet" href="./wallet.css">
+</head>
+<body data-tab="wallet">
+  <svg class="sprites" aria-hidden="true">
+    <symbol id="i-ext" viewBox="0 0 16 16"><path stroke-linecap="round" stroke-linejoin="round" d="M7 3.5H4.5A1 1 0 0 0 3.5 4.5v7a1 1 0 0 0 1 1h7a1 1 0 0 0 1-1V9M9 3.5h3.5V7M8.5 7.5 12.5 3.5"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 16 16"><rect x="6" y="6" width="7.5" height="7.5" rx="1.25"/><path d="M10 6V4.25A1.25 1.25 0 0 0 8.75 3H4.25A1.25 1.25 0 0 0 3 4.25v4.5A1.25 1.25 0 0 0 4.25 10H6"/></symbol>
+    <symbol id="i-ok" viewBox="0 0 16 16"><path stroke-linecap="round" stroke-linejoin="round" d="M3.5 8.5 6.5 11.5 12.5 4.5"/></symbol>
+    <symbol id="i-off" viewBox="0 0 16 16"><path stroke-linecap="round" stroke-linejoin="round" d="M6 3.5H4.25A.75.75 0 0 0 3.5 4.25v7.5c0 .41.34.75.75.75H6M9.5 10.5 12.5 8 9.5 5.5M12.25 8H6.5"/></symbol>
+  </svg>
+  <header>
+    <div class="hdr-bar">
+      <p class="brand"><svg class="i" viewBox="0 0 345 345" aria-hidden="true"><path fill="#F5B554" d="M9 30L22 14L56 5L300 6L314 12L333 22L339 48L336 264H9V30Z"/><path fill="#D58141" d="M9 315L22 331L56 340L300 339L314 333L333 323L339 297L336 242H9V315Z"/><path fill="#3B292F" d="M308 34H31V317H308V34Z"/><path fill="#533C40" d="M297 57H42V167H297V57ZM288 45H52V169H288V45Z"/><path fill="#AC4C3F" d="M9 37H0V295H9V37ZM9 289H0V308H9V289ZM19 19H9V37H19V19ZM19 308H9V326H19V308ZM37 9H19V19H37V9ZM37 326H19V336H37V326ZM33 36H23V309H33V36ZM306 26H33V36H306V26ZM308 309H33V319H308V309ZM56 0H37V9H56V0ZM301 0H37V9H301V0ZM292 336H37V345H292V336ZM308 336H289V345H308V336ZM308 0H298V9H308V0ZM315 36H306V309H315V36ZM326 9H308V19H326V9ZM326 326H308V336H326V326ZM336 19H326V37H336V19ZM336 308H326V326H336V308ZM345 37H336V56H345V37ZM345 50H336V301H345V50ZM345 298H336V308H345V298Z"/><path fill="#C9443E" d="M97 95H82V142H97V95ZM97 172H82V249H97V172ZM112 111H97V188H112V111ZM112 249H97V280H112V249ZM128 49H112V65H128V49ZM128 95H112V111H128V95ZM128 126H112V157H128V126ZM143 280H112V295H143V280ZM158 142H128V157H158V142ZM158 65H143V95H158V65ZM158 111H143V142H158V111ZM174 80H158V142H174V80ZM189 80H158V95H189V80ZM189 80H174V111H189V80ZM205 95H174V111H205V95ZM205 95H189V126H205V95ZM220 111H189V126H220V111ZM220 111H205V142H220V111ZM235 126H205V142H235V126ZM235 126H220V172H235V126ZM235 265H220V295H235V265ZM251 265H220V280H251V265ZM251 157H235V203H251V157ZM266 188H251V265H266V188Z"/><path fill="#DC653D" d="M112 188H97V249H112V188ZM128 157H112V234H128V157ZM189 157H112V172H189V157ZM220 142H158V157H220V142ZM189 111H174V142H189V111ZM205 126H189V142H205V126ZM220 157H205V188H220V157ZM235 172H220V218H235V172ZM251 203H235V265H251V203Z"/><path fill="#EF9D5C" d="M128 234H112V280H128V234ZM143 172H128V280H143V172ZM205 172H128V188H205V172ZM158 172H143V295H158V172ZM220 188H143V203H220V188ZM174 188H158V295H174V188ZM220 203H158V218H220V203ZM189 203H174V295H189V203ZM235 218H174V234H235V218ZM205 157H189V172H205V157ZM205 218H189V295H205V218ZM235 234H189V249H235V234ZM220 234H205V295H220V234ZM235 249H205V265H235V249Z"/><path fill="#323232" d="M129 202H112V219H129V202ZM204 188H128V204H204V188ZM143 203H128V219H143V203ZM158 265H143V280H158V265ZM174 249H158V265H174V249ZM235 234H189V249H235V234Z"/><path fill="#524C50" d="M113 202H97V211H113V202ZM112 211H97V226H112V211ZM128 218H112V234H128V218ZM235 280H112V295H235V280ZM143 219H128V249H143V219ZM174 203H143V249H174V203ZM220 203H143V219H220V203ZM250 219H158V234H250V219ZM204 265H158V280H204V265ZM189 219H174V265H189V219Z"/></svg><span class="brand-name">Blacksmith</span></p>
+      <div class="hdr-actions" id="hdrActions">
+        <button id="theme" class="icon-btn badge quiet" type="button" aria-label="Switch to light theme"><svg class="i sun" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="2.6"/><path stroke-linecap="round" d="M8 1.75v1.25M8 13v1.25M1.75 8H3M13 8h1.25M3.52 3.52l.88.88M11.6 11.6l.88.88M3.52 12.48l.88-.88M11.6 4.4l.88-.88"/></svg><svg class="i moon" viewBox="0 0 16 16" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M13 10.1A5.5 5.5 0 0 1 5.9 3 5.75 5.75 0 1 0 13 10.1z"/></svg></button>
+        <button id="connect" class="pri badge" type="button" aria-label="Connect wallet">Connect wallet</button>
+      </div>
+    </div>
+    <div class="net">
+    <div class="net-row">
+    <div class="seg" role="group" aria-label="Network">
+      <button id="c1" type="button" aria-pressed="false" disabled><svg class="i" viewBox="0 0 32 32" aria-hidden="true"><path fill="#8A92B2" d="M16.4 1.3 7.4 16.2l9-4.1z"/><path fill="#62688F" d="M16.4 12.1 7.4 16.2l9 5.3z"/><path fill="#62688F" d="M25.4 16.2 16.4 1.3v10.8z"/><path fill="#454A75" d="M16.4 21.5 25.4 16.2l-9-4.1z"/><path fill="#8A92B2" d="M7.4 17.9 16.4 30.6v-7.4z"/><path fill="#62688F" d="M16.4 23.2v7.4l9-12.7z"/></svg>Ethereum</button>
+      <button id="c8453" type="button" aria-pressed="false" disabled><svg class="i" viewBox="0 0 111 111" aria-hidden="true"><path fill="#0052FF" d="M55 110c30.4 0 55.1-24.6 55.1-55C110 24.6 85.4 0 55 0 26 0 2.4 22.2 0 50.4h73v9.2H0C2.4 87.9 26 110 55 110z"/></svg>Base</button>
+    </div>
+    <button type="button" id="rpcAdd" class="badge quiet" aria-pressed="false" aria-expanded="false" aria-controls="rpcBox">Custom RPC</button>
+    </div>
+    <div class="field" id="rpcBox" hidden>
+      <input id="rpcIn" type="text" placeholder="https://…" autocomplete="off" spellcheck="false" aria-label="Custom RPC" />
+    </div>
+    </div>
+  </header>
+
+  <div class="boot">
+    <div class="hero">
+      <h1>Your smart account</h1>
+      <p class="lede">Your Ethereum or Base wallet already has one. Connect to see it. If you used Blacksmith V1, it is still this account. Blacksmith never had the keys.</p>
+      <div class="hero-actions">
+        <button id="connectLand" class="pri" type="button">Connect wallet</button>
+        <button type="button" id="skillOpen" class="skill-open quiet" aria-expanded="false">SKILL.md</button>
+      </div>
+    </div>
+
+    <section class="land" aria-labelledby="acct-k">
+      <h2 id="acct-k" class="kicker">The account</h2>
+      <p class="land-copy">Same address on Ethereum and Base. Each chain is its own setup. People can pay it now. You create it once when you need to send.</p>
+      <p class="land-copy">If you used Blacksmith V1, connect that wallet. Same funds. Closing a website does not touch the account.</p>
+    </section>
+
+    <section class="land" aria-labelledby="page-k">
+      <h2 id="page-k" class="kicker">This page</h2>
+      <p class="land-copy">This page can be stored on Ethereum and Base. It is one HTML file. No website to keep online.</p>
+      <div class="well host" id="pageHost">
+        <p id="hostPending">You are looking at a copy on this device. Save it to open the same wallet later from a file.</p>
+        <div id="hostLive" hidden>
+          <p>This page is stored on-chain at <span class="aa-line host-addr"><span class="mono" id="hostAddr"></span><button id="copyHost" class="icon-btn tok-open quiet" type="button" aria-label="Copy page contract"><svg class="i copy" aria-hidden="true"><use href="#i-copy"/></svg><svg class="i ok" aria-hidden="true"><use href="#i-ok"/></svg></button><a id="hostScan" class="icon-btn tok-open quiet" aria-disabled="true" tabindex="-1" aria-label="View page contract on explorer" target="_blank" rel="noopener"><svg class="i" aria-hidden="true"><use href="#i-ext"/></svg></a></span>.</p>
+          <p class="muted">Same address on Ethereum and Base. Open it again from either chain, or save a file.</p>
+          <ul class="ways">
+            <li>Ethereum <a id="hostGw" class="mono" rel="noopener"></a></li>
+            <li>Base <a id="hostGwBase" class="mono" rel="noopener"></a></li>
+            <li><a id="hostWeb3" class="mono" rel="noopener"></a></li>
+          </ul>
+        </div>
+        <div class="host-acts">
+          <button type="button" id="hostSave" class="badge quiet">Save this page</button>
+        </div>
+        <div id="hostCastBox" class="host-cast" hidden>
+          <p class="muted">Or fetch a copy from the chain</p>
+          <div class="host-cast-pre">
+            <pre id="hostCast"></pre>
+            <button id="copyCast" class="icon-btn tok-open quiet" type="button" aria-label="Copy fetch command"><svg class="i copy" aria-hidden="true"><use href="#i-copy"/></svg><svg class="i ok" aria-hidden="true"><use href="#i-ok"/></svg></button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="land land-ask" aria-labelledby="ask-k">
+      <h2 id="ask-k" class="kicker">Questions</h2>
+      <div class="well ask-list" id="askList">
+        <div class="ask" data-open>
+          <button type="button" class="ask-sum quiet" aria-expanded="true" aria-controls="ask-1">What is a smart account?</button>
+          <div class="ask-body" id="ask-1">
+            <p>A contract wallet you control with the personal wallet you connect. Get paid at the smart-account address, not the one you connect with.</p>
+          </div>
+        </div>
+        <div class="ask">
+          <button type="button" class="ask-sum quiet" aria-expanded="false" aria-controls="ask-2">I used Blacksmith V1. Is this mine?</button>
+          <div class="ask-body" id="ask-2" hidden>
+            <p>Yes, if you connect the same wallet. Same address, same funds. If you lose that wallet, this page cannot recover it.</p>
+          </div>
+        </div>
+        <div class="ask">
+          <button type="button" class="ask-sum quiet" aria-expanded="false" aria-controls="ask-3">I never used Blacksmith. What happens when I connect?</button>
+          <div class="ask-body" id="ask-3" hidden>
+            <p>You see the smart-account address for this wallet on this chain. If this chain has no contract yet, create it once. Your wallet pays gas. If it is already there, you continue.</p>
+          </div>
+        </div>
+        <div class="ask">
+          <button type="button" class="ask-sum quiet" aria-expanded="false" aria-controls="ask-4">Why does my wallet need ETH?</button>
+          <div class="ask-body" id="ask-4" hidden>
+            <p>A send is a normal transaction from the connected wallet. A little ETH there pays that gas. The smart account also needs ETH or prepaid gas so the send itself can run — tokens alone are not enough.</p>
+          </div>
+        </div>
+        <div class="ask">
+          <button type="button" class="ask-sum quiet" aria-expanded="false" aria-controls="ask-5">Where is swap or WalletConnect?</button>
+          <div class="ask-body" id="ask-5" hidden>
+            <p>This page lists tokens and sends. Copy the smart-account address into any other app for the rest.</p>
+          </div>
+        </div>
+        <div class="ask">
+          <button type="button" class="ask-sum quiet" aria-expanded="false" aria-controls="ask-6">How do I keep this page?</button>
+          <div class="ask-body" id="ask-6" hidden>
+            <p>Save this page to get a file you can open in any browser. After the page lives in a contract, this card shows that address plus Ethereum, Base, and web3:// links to open the same file from the chain.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <div class="tabs" id="tabs" role="tablist" aria-label="Wallet sections">
+    <button type="button" role="tab" class="quiet" id="tab-wallet" data-tab="wallet" aria-controls="panel-wallet" aria-selected="true">Wallet</button>
+    <button type="button" role="tab" class="quiet" id="tab-activity" data-tab="activity" aria-controls="panel-activity" aria-selected="false" tabindex="-1">Activity</button>
+    <button type="button" role="tab" class="quiet" id="tab-skill" data-tab="skill" aria-controls="panel-skill" aria-selected="false" tabindex="-1">SKILL.md</button>
+  </div>
+
+  <div class="panel-wallet" id="panel-wallet" role="tabpanel" aria-labelledby="tab-wallet">
+  <section class="pay" aria-labelledby="send-k">
+    <h2 id="send-k" class="vh">Send</h2>
+    <div class="list">
+      <div class="field-head">
+        <span class="aa-line">
+          <span class="mono" id="aa" title="">-</span>
+          <button id="copyAa" class="icon-btn tok-open quiet" type="button" hidden aria-label="Copy account address"><svg class="i copy" aria-hidden="true"><use href="#i-copy"/></svg><svg class="i ok" aria-hidden="true"><use href="#i-ok"/></svg></button>
+          <a id="openAa" class="icon-btn tok-open quiet" aria-disabled="true" tabindex="-1" aria-label="View account on explorer" target="_blank" rel="noopener"><svg class="i" aria-hidden="true"><use href="#i-ext"/></svg></a>
+        </span>
+        <button type="button" id="tokAll" class="badge quiet" hidden>Select all</button>
+      </div>
+      <p id="aaNote" class="muted"></p>
+      <p id="aaAlt" class="mono muted" hidden></p>
+      <button type="button" id="aaAct" class="quiet" hidden disabled aria-describedby="aaNote">Create older account</button>
+      <div class="rows" id="assets">
+        <div class="tok-scroll">
+        <div class="tok">
+          <div class="tok-head">
+            <label class="tok-pick"><input id="takeEth" type="checkbox" /> <span class="tok-id"><span class="tok-sym">ETH</span><span class="tok-meta muted">Ether · native</span></span></label>
+          </div>
+          <div class="ig">
+            <input id="amtEth" type="text" inputmode="decimal" placeholder="0" autocomplete="off" spellcheck="false" data-amt="eth" />
+            <button type="button" data-max="eth">Max</button>
+          </div>
+          <span class="mono" id="ethBal">-</span>
+        </div>
+        <div class="tok">
+          <div class="tok-head">
+            <label class="tok-pick"><input id="takeEp" type="checkbox" /> <span class="tok-id"><span class="tok-sym">Prepaid gas</span></span></label>
+            <span class="tok-meta muted">EntryPoint · <span class="tok-addr-line"><span class="mono" id="epAddr"></span><a id="epOpen" class="icon-btn tok-open quiet" aria-disabled="true" tabindex="-1" aria-label="View EntryPoint on explorer" target="_blank" rel="noopener"><svg class="i" aria-hidden="true"><use href="#i-ext"/></svg></a></span></span>
+          </div>
+          <div class="ig">
+            <input id="amtEp" type="text" inputmode="decimal" placeholder="0" autocomplete="off" spellcheck="false" data-amt="ep" />
+            <button type="button" data-max="ep">Max</button>
+          </div>
+          <span class="mono" id="epBal">-</span>
+        </div>
+        <div id="tokens"></div>
+        </div>
+        <div class="tok tok-add" id="tokAdd">
+          <button type="button" class="tok-add-open quiet" aria-expanded="false" aria-controls="tokenIn">Custom token</button>
+          <div class="ig">
+            <input id="tokenIn" type="text" placeholder="0x…" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Token contract" aria-describedby="tokenErr" />
+            <button id="addTok" type="button">Add</button>
+          </div>
+          <p id="tokenErr" class="err" hidden></p>
+        </div>
+      </div>
+      <p id="amtErr" class="err" hidden></p>
+      <p id="tokEmpty" class="muted" hidden></p>
+    </div>
+    <div class="field">
+      <div class="field-head">
+        <label for="dest">To</label>
+        <button id="destHint" class="badge quiet" hidden>Your wallet</button>
+        <button type="button" id="destMe" hidden>Use connected wallet</button>
+      </div>
+      <input id="dest" type="text" placeholder="0x…" enterkeyhint="send" autocomplete="off" autocapitalize="off" spellcheck="false" aria-describedby="destHint destErr" />
+      <p id="destErr" class="err" hidden></p>
+    </div>
+  </section>
+  </div>
+
+  <section class="act" id="panel-activity" role="tabpanel" aria-labelledby="tab-activity" hidden>
+    <h2 class="vh">Activity</h2>
+    <span id="histFork" class="badge quiet" hidden>Local</span>
+    <ul id="hist" class="hist"></ul>
+    <p id="histEmpty" class="muted">No activity yet. Sends, token transfers, and ETH this account received show up here.</p>
+  </section>
+
+  <section class="skill" id="panel-skill" role="tabpanel" aria-labelledby="tab-skill" hidden>
+    <button type="button" id="skillBack" class="skill-back quiet">Back</button>
+    <h2 class="vh">SKILL.md</h2>
+    <p id="skillHint" class="muted" hidden>Connect a wallet to fill the owner and smart-account lines. Until then the skill keeps placeholders.</p>
+    <div class="preview">
+      <button id="copySkill" class="icon-btn" type="button" aria-label="Copy SKILL.md" disabled><svg class="i copy" aria-hidden="true"><use href="#i-copy"/></svg><svg class="i ok" aria-hidden="true"><use href="#i-ok"/></svg></button>
+      <pre id="skillMd" class="vh"></pre>
+      <article id="skillView" class="md" aria-label="SKILL.md"></article>
+    </div>
+  </section>
+
+  <p id="note" role="status" aria-live="polite" aria-atomic="true"></p>
+  <div class="dock" id="dock">
+    <button id="create" class="pri wide" type="button" hidden disabled aria-describedby="note">Create account</button>
+    <button id="go" class="pri wide" type="button" disabled aria-describedby="note">Send</button>
+    <div id="tx" class="receipt"></div>
+  </div>
+
+  <script type="module" src="./app.mjs"></script>
+</body>
+</html>

@@ -1,0 +1,24 @@
+name: onchain-ui
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  freeze:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.21
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.8.1
+      - run: node onchain-ui/userop.selfcheck.mjs
+      - run: test -f onchain-ui/dist/index.html
+      - run: node onchain-ui/build.mjs
+      - run: cd onchain-ui/contracts && forge install foundry-rs/forge-std@v1.16.2 --no-git && forge test -vv
