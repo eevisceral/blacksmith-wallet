@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { KERNEL_FACTORY, encodeGetAccountAddress, pageHostFromLocation } from '../kernel.mjs';
 import { ANVIL_EOA, jrpc, waitForRpc, forkMinedFromBlock } from './seed.mjs';
 import { serveHtml } from './serve.mjs';
-import { chromeBin } from './chrome.mjs';
+import { chromeBin, chromeArgs } from './chrome.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const uiRoot = join(here, '..');
@@ -145,21 +145,11 @@ async function chromeProbe(origin, profile) {
   const dbg = Number(process.env.HOST_CDP_PORT || 9333);
   const child = spawn(
     CHROME,
-    [
-      '--headless=new',
-      '--disable-gpu',
-      '--no-first-run',
-      '--no-default-browser-check',
-      '--disable-dev-shm-usage',
-      '--disable-extensions',
-      '--no-proxy-server',
-      '--use-mock-keychain',
-      '--password-store=basic',
-      '--remote-allow-origins=*',
+    chromeArgs([
       `--remote-debugging-port=${dbg}`,
       `--user-data-dir=${profile}`,
       origin + '/',
-    ],
+    ]),
     { stdio: ['ignore', 'pipe', 'pipe'] }
   );
   const expr = `(() => {

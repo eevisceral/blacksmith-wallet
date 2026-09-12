@@ -16,7 +16,7 @@ import {
 } from '../kernel.mjs';
 import { ANVIL_EOA, USDC, jrpc, waitForRpc } from './seed.mjs';
 import { serveHtml, serveUiRoot } from './serve.mjs';
-import { chromeBin } from './chrome.mjs';
+import { chromeBin, chromeArgs } from './chrome.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const uiRoot = join(here, '..');
@@ -49,23 +49,12 @@ async function withChrome(url, extraArgs, fn) {
   const dbg = 20000 + (Date.now() % 20000) + Math.floor(Math.random() * 50);
   const child = spawn(
     CHROME,
-    [
-      '--headless=new',
-      '--disable-gpu',
-      '--no-first-run',
-      '--no-default-browser-check',
-      '--disable-dev-shm-usage',
-      '--disable-extensions',
-      '--no-proxy-server',
-      '--use-mock-keychain',
-      '--password-store=basic',
-      '--disable-features=HttpsUpgrades,HttpsFirstBalancedMode,HttpsFirstModeV2',
-      '--remote-allow-origins=*',
+    chromeArgs([
       `--remote-debugging-port=${dbg}`,
       `--user-data-dir=${profile}`,
       ...extraArgs,
       url,
-    ],
+    ]),
     { stdio: ['ignore', 'pipe', 'pipe'] }
   );
   let ws;

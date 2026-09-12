@@ -109,7 +109,7 @@ const totalUsd = usdOf(totalWei, usd);
 const tag = totalUsd < BEST ? 'BEST' : totalUsd < GOOD ? 'GOOD' : 'PASS';
 
 console.log(`VersionHost deploy  ${GAS.toLocaleString()} gas × Ethereum + Base`);
-console.log(`ETH ${money(usd)}   forge-limit sum (conservative vs live gasUsed)`);
+console.log(`ETH ${money(usd)}   per-chain forge script estimate × Ethereum + Base`);
 console.log('');
 console.log(line('Ethereum', ethGwei, ethWei, usd));
 console.log(
