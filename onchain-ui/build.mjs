@@ -2,13 +2,29 @@ import { readFileSync, writeFileSync, mkdirSync, unlinkSync, copyFileSync } from
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { BUN_PIN } from './bun-pin.mjs';
 
 const dir = dirname(fileURLToPath(import.meta.url));
 const dist = join(dir, 'dist');
 const tmpJs = join(dist, '.app.min.js');
 mkdirSync(dist, { recursive: true });
 
+function bunVersion() {
+  const r = spawnSync('bun', ['--version'], { encoding: 'utf8' });
+  return (r.status === 0 ? String(r.stdout || '').trim() : '');
+}
+
+function requirePinnedBun() {
+  const v = bunVersion();
+  if (v !== BUN_PIN) {
+    throw new Error(
+      `freeze minify needs bun ${BUN_PIN} (got ${v || 'missing'}). CI and .bun-version pin this; do not RESTAMP with another bun.`,
+    );
+  }
+}
+
 function bundleJs() {
+  requirePinnedBun();
   const bun = spawnSync('bun', ['build', '--minify', '--outfile', tmpJs, join(dir, 'app.mjs')], {
     encoding: 'utf8',
   });
@@ -21,14 +37,7 @@ function bundleJs() {
       /* no tmp */
     }
   }
-  console.warn('bun minify unavailable; writing unminified bundle');
-  const strip = (src) =>
-    src
-      .replace(/import\s*\{[\s\S]*?\}\s*from\s*['"][^'"]+['"];\s*/g, '')
-      .replace(/^export /gm, '');
-  return ['kernel.mjs', 'util.mjs', 'rpc.mjs', 'dest.mjs', 'history.mjs', 'send.mjs', 'app.mjs']
-    .map((f) => strip(readFileSync(join(dir, f), 'utf8')))
-    .join('\n');
+  throw new Error((bun.stderr || bun.stdout || 'bun build --minify failed').trim());
 }
 
 function shortIdent(i) {

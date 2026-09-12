@@ -4,7 +4,7 @@ Kernel 0.2.4 smart-account wallet (Ethereum and Base) whose UI can live in a con
 
 [MIT](LICENSE). Agent notes: [AGENTS.md](AGENTS.md). Operator manual: [SKILL.md](SKILL.md) (in-page tab; inlined into the freeze).
 
-Needs **Node 20+**. Fork playground and Foundry tests also need **Foundry** (`anvil`, `forge`, `cast`): https://book.getfoundry.sh/getting-started/installation
+Needs **Node 20+**. Freeze rebuild needs **bun 1.2.21** (`.bun-version`; other bun versions change dist bytes). Fork playground and Foundry tests also need **Foundry** (`anvil`, `forge`, `cast`): https://book.getfoundry.sh/getting-started/installation
 
 ## Run
 
@@ -25,13 +25,13 @@ npm test                           # selfcheck + forge tests
 # Fork must already be up. smoke-ui wants Chrome (or CHROME).
 npm run test:fork
 
-node onchain-ui/dev/deploy-cost.mjs   # live gas quote; may exit 1 if L1 is expensive
+node onchain-ui/dev/deploy-cost.mjs   # live quote using forge-script gas × both chains; may exit 1 if > $5
 
 # Static page only (no seed). Stop the playground first — both bind :8765.
 python3 -m http.server -d onchain-ui 8765
 ```
 
-The committed `onchain-ui/dist/index.html` **is** the freeze. `node onchain-ui/build.mjs` refuses to overwrite it if minify output drifts (`bun` minify; CI pins bun). Set `RESTAMP=1` only when you intend a new pin (`forge` required then). Host CREATE2 is hermetic (`bytecode_hash = "none"`).
+The committed `onchain-ui/dist/index.html` **is** the freeze. `node onchain-ui/build.mjs` requires **bun 1.2.21** and refuses to overwrite if minify output drifts. Set `RESTAMP=1` only when you intend a new pin (`forge` required then). Host CREATE2 is hermetic (`bytecode_hash = "none"`).
 
 One Anvil at a time. Ethereum and Base together only in `test:fork` smoke-ui (`:8546` + `baseRpc`).
 

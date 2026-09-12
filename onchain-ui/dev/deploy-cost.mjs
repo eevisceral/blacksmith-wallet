@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 /**
  * Quote AccountFactory + VersionHost CREATE2 (factory + chunks + host) on Ethereum + Base right now.
- * Uses the last forge-script gas-limit sum (conservative vs live gasUsed).
+ * Uses per-chain forge-script estimated gas (not live gasUsed).
  * BEST < $2  GOOD < $5  PASS otherwise (exit 1).
  *
  *   node onchain-ui/dev/deploy-cost.mjs
  *   npm run quote:deploy
- *   ETH_RPC=… BASE_RPC=… ETH_USD=2500 node onchain-ui/dev/deploy-cost.mjs
+ *   ETH_RPC=… BASE_RPC=… ETH_USD=2500 FORGE_GAS=31277373 node onchain-ui/dev/deploy-cost.mjs
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { CHAINS } from '../kernel.mjs';
 import { jrpc } from '../rpc.mjs';
 
-const GAS = 26_928_640n; // forge script Deploy.s.sol limit sum (ETH+Base simulate 2026-08-18)
+const GAS = BigInt(process.env.FORGE_GAS || '31277373');
 const BEST = 2;
 const GOOD = 5;
 const ORACLE = '0x420000000000000000000000000000000000000F';

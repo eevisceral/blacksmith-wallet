@@ -53,8 +53,10 @@ import { decodeStr, logsFrom, getRpcUrl, setRpcUrl } from './rpc.mjs';
 import { HIST_CAP, HIST_V, HIST_TS } from './history.mjs';
 import { getPendingTx, setPendingTx, forgetPendingTx, sendFail } from './send.mjs';
 import { readFileSync, existsSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { BUN_PIN } from './bun-pin.mjs';
 
 function eq(name, a, b) {
   const A = String(a).toLowerCase();
@@ -434,6 +436,10 @@ if (!skill.trimStart().startsWith('---') || !skill.includes('name: blacksmith-v1
     console.error('FAIL page must not fetch Chainlist rpcs.json');
     process.exit(1);
   }
+  if (/bun-pin/.test(page)) {
+    console.error('FAIL page bundle must not import bun-pin');
+    process.exit(1);
+  }
 }
 for (const a of [ENTRY_POINT, KERNEL_FACTORY, ACCOUNT_FACTORY, KERNEL_IMPL, ECDSA_VALIDATOR]) {
   if (!skill.includes(a)) {
@@ -782,6 +788,23 @@ const wallet = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'dev/i
 if (!wallet.includes('isAnvilFork: !cfg.baseRpc') || !wallet.includes('cfg.baseRpc') || !wallet.includes('baseRpc: cfg.baseRpc')) {
   console.error('FAIL playground wallet stays one chain unless smoke sets baseRpc');
   process.exit(1);
+}
+
+{
+  const bunFile = join(here, '..', '.bun-version');
+  const pinned = existsSync(bunFile) ? readFileSync(bunFile, 'utf8').trim() : '';
+  if (pinned !== BUN_PIN) {
+    console.error('FAIL .bun-version must be', BUN_PIN);
+    process.exit(1);
+  }
+  const bun = spawnSync('bun', ['--version'], { encoding: 'utf8' });
+  if (bun.status === 0) {
+    const v = String(bun.stdout || '').trim();
+    if (v !== BUN_PIN) {
+      console.error(`FAIL bun ${v} is not freeze pin ${BUN_PIN}`);
+      process.exit(1);
+    }
+  }
 }
 
 console.log('ok');

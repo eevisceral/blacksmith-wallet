@@ -16,13 +16,13 @@ import {
 } from '../kernel.mjs';
 import { ANVIL_EOA, USDC, jrpc, waitForRpc } from './seed.mjs';
 import { serveHtml, serveUiRoot } from './serve.mjs';
+import { chromeBin } from './chrome.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const uiRoot = join(here, '..');
 const RPC = process.env.FORK_RPC || 'http://127.0.0.1:8545';
 const BASE_RPC = process.env.BASE_RPC || 'http://127.0.0.1:8546';
-const CHROME =
-  process.env.CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+const CHROME = chromeBin();
 const UNI = '0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984';
 const FAKE_HOST = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 

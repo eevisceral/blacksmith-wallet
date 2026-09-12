@@ -8,13 +8,13 @@ import { fileURLToPath } from 'node:url';
 import { KERNEL_FACTORY, encodeGetAccountAddress, pageHostFromLocation } from '../kernel.mjs';
 import { ANVIL_EOA, jrpc, waitForRpc, forkMinedFromBlock } from './seed.mjs';
 import { serveHtml } from './serve.mjs';
+import { chromeBin } from './chrome.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const uiRoot = join(here, '..');
 const RPC = process.env.FORK_RPC || 'http://127.0.0.1:8545';
 const HOST_UI_PORT = Number(process.env.HOST_UI_PORT || 0);
-const CHROME =
-  process.env.CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+const CHROME = chromeBin();
 const REUSE = process.env.REUSE_HOST === '1';
 
 function fail(reason) {
