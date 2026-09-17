@@ -659,6 +659,7 @@
     }
     .list > .field-head { justify-content: space-between; flex-shrink: 0; }
     .list > .err, #tokEmpty { flex-shrink: 0; }
+    #tokMore { flex-shrink: 0; align-self: flex-start; }
     .badge[aria-pressed="true"] { box-shadow: var(--sunken); }
     #rpcBox input {
       min-height: var(--s6);
@@ -849,12 +850,12 @@
       font-weight: 600;
       color: var(--link);
     }
-    /* Viewport-sticky: absolute-to-body put toasts below the fold on tall landings. */
+    /* Viewport-sticky toast, top-center: clear of the dock and the asset list. */
     #note {
       position: fixed;
       z-index: 3;
+      top: max(var(--s4), env(safe-area-inset-top));
       inset-inline: max(var(--s4), env(safe-area-inset-left)) max(var(--s4), env(safe-area-inset-right));
-      bottom: max(var(--s4), var(--sb));
       max-width: min(40rem, calc(100% - 2 * var(--s4)));
       margin-inline: auto;
       color: var(--muted);
@@ -868,9 +869,6 @@
     #note.ok { color: var(--ok); }
     #note:not(:empty) { pointer-events: auto; cursor: pointer; }
     #note:empty { display: none; }
-    body.on[data-tab="wallet"] #note {
-      bottom: calc(2 * var(--h) + var(--s6) + var(--s4) + max(var(--s4), var(--sb)));
-    }
     .hist {
       list-style: none;
       margin: 0;
@@ -900,6 +898,9 @@
     .hist li.fail .hist-ttl, .hist li.fail .hist-amt { color: var(--err); }
     .hist .tok-meta, .hist .mono { font-size: var(--fs-sm); }
     #histEmpty, #histFork { flex-shrink: 0; }
+    .hist-more { display: flex; gap: var(--s3); align-items: baseline; padding: 0 var(--s4); flex-shrink: 0; }
+    .hist-more [hidden] { display: none; }
+    #histFloor { margin: 0; font-size: var(--fs-sm); }
     #histFork { width: max-content; cursor: default; font-weight: 500; pointer-events: none; }
     .act { gap: var(--s3); padding-block-end: max(var(--s5), var(--sb)); }
     body.on:is([data-tab="wallet"], [data-tab="activity"], [data-tab="skill"]),
@@ -1057,9 +1058,6 @@
         box-shadow: none;
       }
       body.on[data-tab="wallet"] .dock :is(#go, #create) { width: 100%; }
-      body.on[data-tab="wallet"] #note {
-        bottom: max(var(--s4), var(--sb));
-      }
     }
     @media (max-height: 28rem) and (orientation: landscape) {
       header { margin-block-end: var(--s2); }

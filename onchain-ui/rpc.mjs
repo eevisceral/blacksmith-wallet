@@ -26,6 +26,16 @@ export function archiveLogsMsg(msg) {
   return /archive|personal token|historical state is not available/i.test(msg || '');
 }
 
+/** Receipts-pruning floor from a node error, e.g. "history is available from block 25735899". */
+export function pruneFloor(msg) {
+  const m = /available from block (\d+)/i.exec(msg || '');
+  if (m) return Number(m[1]);
+  return /pruning|pruned/i.test(msg || '') ? -1 : 0;
+}
+
+/** One toast for any pruning-floor failure, whichever surface catches it. */
+export const PRUNE_HINT = 'This node keeps recent history only. An archive Custom RPC (header) goes further back.';
+
 export function rangeLogsMsg(msg) {
   const s = msg || '';
   if (/rate limit|too many requests/i.test(s)) return false;
@@ -36,7 +46,29 @@ export function addrRequiredLogsMsg(msg) {
   return /specify an address/i.test(msg || '');
 }
 
-export async function jrpc(url, method, params, ms = 15000) {
+export function timeoutLogsMsg(msg) {
+  return /timed out|timeout|was aborted/i.test(msg || '');
+}
+
+/** Node cannot serve that log range at all (pruned, method gone) — not a stall, not fatal. */
+export function unservedLogsMsg(msg) {
+  return /pruned history|method (not available|does not exist)/i.test(msg || '');
+}
+
+/** AbortSignal.timeout rejects as TimeoutError (Node says "signal timed out"); a fetch abort is AbortError. */
+function timeoutErr(e) {
+  const n = (e && e.name) || '';
+  return n === 'TimeoutError' || n === 'AbortError' || timeoutLogsMsg((e && e.message) || '');
+}
+
+/** Transient upstream failure (relay timeout, 408/429/5xx) — worth a retry or the next URL. */
+export function transientRpcMsg(msg) {
+  return /status code (408|429|5\d\d)|relay request failed|bad gateway|gateway timeout|service unavailable|request timeout|RPC HTTP (408|429|5\d\d)/i.test(
+    msg || ''
+  );
+}
+
+async function jrpcOnce(url, method, params, ms) {
   if (!url) throw new Error('No RPC URL.');
   const r = await fetch(url, {
     method: 'POST',
@@ -48,6 +80,17 @@ export async function jrpc(url, method, params, ms = 15000) {
   if (j.error) throw new Error(j.error.message || method);
   if (!r.ok) throw new Error('RPC HTTP ' + r.status);
   return j.result;
+}
+
+/** One retry on transient failures so a single overloaded relay can't fail a read. */
+export async function jrpc(url, method, params, ms = 15000) {
+  try {
+    return await jrpcOnce(url, method, params, ms);
+  } catch (e) {
+    if (!timeoutErr(e) && !transientRpcMsg(e.message) && !/fetch failed|networkerror/i.test(e.message || '')) throw e;
+    await new Promise((r) => setTimeout(r, 400));
+    return jrpcOnce(url, method, params, ms);
+  }
 }
 
 export async function call(to, data) {
@@ -92,15 +135,25 @@ function rpcUrls() {
   return rpcUrl ? [rpcUrl, ...rpcAlts] : [];
 }
 
-function logsKind(msg) {
-  const s = msg || '';
+function logsKind(e) {
+  const s = (e && e.message) || '';
   if (/unauthorized|Fork Error|web page instead/i.test(s)) return 'fatal';
+  if (timeoutErr(e)) return 'stall';
   if (/rate limit|too many requests|overloaded|unknown block|RPC HTTP 403/i.test(s)) return 'next';
-  if (rangeLogsMsg(s) || addrRequiredLogsMsg(s) || archiveLogsMsg(s)) return 'next';
+  if (transientRpcMsg(s)) return 'next';
+  if (rangeLogsMsg(s) || addrRequiredLogsMsg(s) || archiveLogsMsg(s) || unservedLogsMsg(s) || pruneFloor(s)) return 'range';
   return 'fatal';
 }
 
-/** Custom URL is exclusive (no public alts). Public URLs must serve unaddressed getLogs. */
+/** 2023-era blocks. Every block there has ERC-20 Transfers, so a node returning
+ *  zero is lying about pruning; a pruned one errors. Either way: not deep. */
+const DEEP_BLOCK = { 1: 17000000, 8453: 4000000 };
+let rpcDeep = false;
+/** Whether the picked node serves old receipts (full-history getLogs). */
+export const rpcHasDeepLogs = () => rpcDeep;
+
+/** Custom URL is exclusive (no public alts). Public URLs must serve unaddressed getLogs.
+ *  Deep-receipts nodes win over head-only ones so 2023-era history scans work. */
 export async function chooseRpc(id, custom, publics) {
   const want = hex(id).toLowerCase();
   const ok = async (u, logs) => {
@@ -113,20 +166,41 @@ export async function chooseRpc(id, custom, publics) {
     }
     return u;
   };
+  const deepAt = DEEP_BLOCK[id] || 0;
+  const deepOk = async (u) => {
+    if (!deepAt) return false;
+    try {
+      const logs = await jrpc(u, 'eth_getLogs', [{ fromBlock: hex(deepAt), toBlock: hex(deepAt), topics: [TRANSFER_TOPIC] }], 12000);
+      return Array.isArray(logs) && logs.length > 0;
+    } catch {
+      return false;
+    }
+  };
   if (custom) {
     const url = await ok(custom, false);
+    rpcDeep = await deepOk(url);
     setRpcUrl(url, []);
     return url;
   }
+  let shallow = '';
   let last = new Error('No RPC URL.');
   for (const u of publics) {
     try {
       const url = await ok(u, true);
-      setRpcUrl(url, publics.filter((x) => x !== url));
-      return url;
+      if (await deepOk(url)) {
+        rpcDeep = true;
+        setRpcUrl(url, publics.filter((x) => x !== url));
+        return url;
+      }
+      if (!shallow) shallow = url;
     } catch (e) {
       last = e;
     }
+  }
+  if (shallow) {
+    rpcDeep = false;
+    setRpcUrl(shallow, publics.filter((x) => x !== shallow));
+    return shallow;
   }
   throw last;
 }
@@ -142,26 +216,82 @@ async function getLogsAt(url, from, to, topics, addr) {
   }
 }
 
+/** Every scan URL stalled. Public mode points at the header Custom RPC; raw abort text never reaches the page. */
+export const LOGS_TIMEOUT_PUBLIC = 'Public nodes timed out. Custom RPC is in the header.';
+export const LOGS_TIMEOUT_CUSTOM = 'That RPC timed out. Check the URL or paste another.';
+
 export async function getLogs(from, to, topics, addr) {
   if (from > to) return [];
-  if (to - from > LOGS_RANGE_MAX) {
-    let all = [];
-    for (let a = from; a <= to; a += LOGS_RANGE_MAX + 1) {
-      all = all.concat(await getLogs(a, Math.min(to, a + LOGS_RANGE_MAX), topics, addr));
-    }
-    return all;
-  }
-  const urls = rpcUrls();
+  return (await scanLogs(from, to, topics, addr)).logs;
+}
+
+/**
+ * One paged getLogs loop: per-page URL failover, answering-URL promotion, optional
+ * soft budget ({pages, ms, t0, used}) and per-page callback. `descend` walks newest
+ * first so token discovery paints recent holdings before older history.
+ */
+async function scanLogs(from, to, topics, addr, opts) {
+  const o = opts || {};
+  const spans = [];
+  for (let a = from; a <= to; a += LOGS_RANGE_MAX + 1) spans.push([a, Math.min(to, a + LOGS_RANGE_MAX)]);
+  if (o.descend) spans.reverse();
+  const order = rpcUrls();
   let last = new Error('No RPC URL.');
-  for (const url of urls) {
-    try {
-      return await getLogsAt(url, from, to, topics, addr);
-    } catch (e) {
-      last = e;
-      if (logsKind(e.message || '') === 'fatal') throw e;
+  let all = [];
+  let stopped = '';
+  for (const [a, b] of spans) {
+    const budget = o.budget;
+    if (budget) {
+      if (budget.pages != null && budget.used >= budget.pages) {
+        stopped = 'pages';
+        break;
+      }
+      if (budget.ms != null && Date.now() - budget.t0 >= budget.ms) {
+        stopped = 'ms';
+        break;
+      }
     }
+    if (o.live && !o.live()) {
+      stopped = 'halt';
+      break;
+    }
+    let page;
+    let ok = false;
+    const kinds = [];
+    for (const url of order) {
+      try {
+        page = await getLogsAt(url, a, b, topics, addr);
+        ok = true;
+        // A URL that answered leads the remaining pages, so one staller stops taxing every page.
+        if (url !== order[0]) order.unshift(order.splice(order.indexOf(url), 1)[0]);
+        break;
+      } catch (e) {
+        last = e;
+        const k = logsKind(e);
+        if (k === 'fatal') throw e;
+        kinds.push(k);
+      }
+    }
+    if (!ok) {
+      if (timeoutErr(last)) throw new Error(order.length > 1 ? LOGS_TIMEOUT_PUBLIC : LOGS_TIMEOUT_CUSTOM);
+      // Every URL refused this range outright — this node set cannot serve it (prune horizon, tiny range cap).
+      if (kinds.length && kinds.every((k) => k === 'range')) last.unserved = true;
+      throw last;
+    }
+    if (budget) budget.used += 1;
+    all = all.concat(page);
+    if (o.onPage) await o.onPage(page, a, b);
   }
-  throw last;
+  return { logs: all, stopped, done: !stopped };
+}
+
+/** Soft public budget keeps first paint from hanging on a birth→head walk; custom/archive walks further. */
+export const TOK_WALK_PUBLIC = { pages: 30, ms: 15000, passes: 5 };
+export const TOK_WALK_CUSTOM = { pages: 400, ms: 90000, passes: 25 };
+
+/** ERC-20 `Transfer` to `aa`. No LOGS_LOOKBACK ceiling — the caller budgets and resumes via its cursor. */
+export async function walkTransfersIn(from, to, aa, opts) {
+  return scanLogs(from, to, [TRANSFER_TOPIC, null, topicAddress(aa)], null, opts);
 }
 
 export async function accountBirth(a, hi) {
@@ -189,18 +319,35 @@ export async function accountBirth(a, hi) {
   }
 }
 
-/** Token discovery + Activity. Caps to LOGS_LOOKBACK once. */
-export async function scanAccountLogs(from, latest, aa) {
+/** Explicit-range scan for Activity backfill. A pruning floor clamps the range instead of failing it. */
+export async function scanRangeLogs(from, to, aa) {
+  if (from > to) return { ops: [], ins: [], outs: [], wds: [], rcv: [], floor: 0 };
   const pad = topicAddress(aa);
+  const run = (lo) =>
+    Promise.all([
+      getLogs(lo, to, [USER_OP_TOPIC, null, pad], ENTRY_POINT),
+      getLogs(lo, to, [TRANSFER_TOPIC, null, pad]),
+      getLogs(lo, to, [TRANSFER_TOPIC, pad]),
+      getLogs(lo, to, [WITHDRAWN_TOPIC, pad], ENTRY_POINT),
+      getLogs(lo, to, [RECEIVED_TOPIC], aa),
+    ]);
+  try {
+    const [ops, ins, outs, wds, rcv] = await run(from);
+    return { ops, ins, outs, wds, rcv, floor: 0 };
+  } catch (e) {
+    const f = pruneFloor(e.message);
+    if (!f || f < 0 || f <= from || f > to) throw e;
+    const [ops, ins, outs, wds, rcv] = await run(f);
+    return { ops, ins, outs, wds, rcv, floor: f };
+  }
+}
+
+/** Activity feed only — stays inside the recent LOGS_LOOKBACK window. Token discovery uses walkTransfersIn. */
+export async function scanAccountLogs(from, latest, aa) {
   const head = latest - from > LOGS_LOOKBACK ? latest - LOGS_LOOKBACK : from;
-  const [ops, ins, outs, wds, rcv] = await Promise.all([
-    getLogs(head, latest, [USER_OP_TOPIC, null, pad], ENTRY_POINT),
-    getLogs(head, latest, [TRANSFER_TOPIC, null, pad]),
-    getLogs(head, latest, [TRANSFER_TOPIC, pad]),
-    getLogs(head, latest, [WITHDRAWN_TOPIC, pad], ENTRY_POINT),
-    getLogs(head, latest, [RECEIVED_TOPIC], aa),
-  ]);
-  return { ops, ins, outs, wds, rcv, clipped: head > from };
+  const r = await scanRangeLogs(head, latest, aa);
+  const scanned = Math.max(head, r.floor || 0);
+  return { ...r, clipped: scanned > from, head: scanned };
 }
 
 export function logsFrom(logs, from) {

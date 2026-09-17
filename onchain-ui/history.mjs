@@ -7,7 +7,7 @@ import {
   logTopicAddr,
 } from './kernel.mjs';
 import { $, eq, hex, word, fmtAmt, fmtEth, fmtWhen, esc, LS_HIST } from './util.mjs';
-import { jrpc, getRpcUrl, call, decodeStr } from './rpc.mjs';
+import { jrpc, getRpcUrl, call, decodeStr, pruneFloor, PRUNE_HINT } from './rpc.mjs';
 
 export const HIST_CAP = 256;
 export const HIST_V = 2;
@@ -76,8 +76,6 @@ export function renderHist() {
 export function pushHist(hash, picks, dest) {
   const aa = S.aa();
   if (!hash || !aa) return;
-  const cur = histCur();
-  const h = (cur.h || []).filter((x) => !eq(x.hash, hash));
   const legs = (picks || []).map((p) => ({
     d: -1,
     sym: p.kind === 'ep' ? 'prepaid gas' : p.label || p.token?.symbol || 'ETH',
@@ -86,9 +84,15 @@ export function pushHist(hash, picks, dest) {
     p: dest || '',
     k: p.kind === 'tok' ? p.token.address : p.kind,
   }));
-  h.unshift({ hash, kind: 'Send', block: 1e15, ts: Math.floor(Date.now() / 1000), ok: true, legs });
-  histCur({ ...cur, h: h.slice(0, HIST_CAP) });
-  renderHist();
+  const ts = Math.floor(Date.now() / 1000);
+  // Queued behind any in-flight merge so a scan cannot overwrite a pending send.
+  mergeQ = mergeQ.catch(() => {}).then(() => {
+    const cur = histCur();
+    const h = (cur.h || []).filter((x) => !eq(x.hash, hash));
+    h.unshift({ hash, kind: 'Send', block: 1e15, ts, ok: true, legs });
+    histCur({ ...cur, h: h.slice(0, HIST_CAP) });
+    renderHist();
+  });
 }
 
 async function labelTok(addr) {
@@ -141,6 +145,26 @@ export async function discoverHist(quiet, live, scanP) {
   if (from > scan.latest) return;
   const pack = scan.logs;
   if (!pack) return;
+  await mergeHistLogs(pack, quiet, live, { b: scan.birth, t: scan.latest });
+}
+
+/** Merge an older-range pack without moving the head cursor (Scan further). */
+export async function backfillHist(pack, live) {
+  await mergeHistLogs(pack, true, live, {});
+}
+
+/* Merges are async read-modify-write on the same cache; serialize them so a
+ * head scan and a Scan further pass cannot drop each other's rows. */
+let mergeQ = Promise.resolve();
+
+async function mergeHistLogs(pack, quiet, live, patch) {
+  const p = mergeQ.catch(() => {}).then(() => mergeHistLogsInner(pack, quiet, live, patch));
+  mergeQ = p.catch(() => {});
+  return p;
+}
+
+async function mergeHistLogsInner(pack, quiet, live, patch) {
+  const cur = histCur();
   try {
     const { ops, ins, outs, wds, rcv } = pack;
     if (!live()) return;
@@ -223,9 +247,11 @@ export async function discoverHist(quiet, live, scanP) {
     );
     for (const r of h0) if (times.has(r.block)) r.ts = times.get(r.block);
     if (!live()) return;
-    histCur({ b: scan.birth, t: scan.latest, v: HIST_V, h: h0 });
+    histCur({ ...cur, ...patch, v: HIST_V, h: h0 });
     renderHist();
   } catch (e) {
-    if (!quiet) S.setStatus(e.message || 'Couldn’t load activity.', 'err');
+    if (quiet) return;
+    // Same copy as the token scan path so a shared scan failure is one toast, not two.
+    S.setStatus(pruneFloor(e.message) ? PRUNE_HINT : e.message || 'Couldn’t load activity.', 'err');
   }
 }

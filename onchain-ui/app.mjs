@@ -46,12 +46,20 @@ import {
   chooseRpc,
   accountBirth,
   scanAccountLogs,
+  scanRangeLogs,
   logsFrom,
   kernelImpl,
+  rpcHasDeepLogs,
+  pruneFloor,
+  PRUNE_HINT,
+  timeoutLogsMsg,
+  walkTransfersIn,
+  TOK_WALK_PUBLIC,
+  TOK_WALK_CUSTOM,
   LOGS_LOOKBACK,
 } from './rpc.mjs';
 import { destError, DEST_7702, is7702 } from './dest.mjs';
-import { HIST_V, initHist, histCur, renderHist, pushHist, discoverHist } from './history.mjs';
+import { HIST_V, initHist, histCur, renderHist, pushHist, discoverHist, backfillHist } from './history.mjs';
 import {
   initSend,
   selectedPicks,
@@ -78,6 +86,11 @@ const ALSO_OLDER = 'This wallet also has an older account.';
 const ALSO_OURS = 'This page’s account is still here.';
 const SEND_ONE = 'This account sends one asset at a time.';
 const CLIP_HINT = 'Showing recent history. Custom RPC can go further back.';
+const TOK_SCANNING = 'Scanning older transfers…';
+const TOK_WALL = 'Public nodes can’t serve this account’s older blocks. Paste a token address, or set a Custom RPC to scan further back.';
+const TOK_CATCHUP = 'Catching up on recent blocks. Tokens appear as the scan reaches them.';
+const tokMoreHint = (f) =>
+  `Scanned back to block ${f}. Older tokens may not show yet — scan further, paste a token address, or set a Custom RPC.`;
 
 const EXT_ICO = '<svg class="i" aria-hidden="true"><use href="#i-ext"/></svg>';
 function explorerOpenHtml(target, kind = 'token') {
@@ -161,7 +174,6 @@ function accountNote() {
   }
   if (!implOk) return { text: 'Unexpected implementation. Don’t send.', err: true };
   const bits = [];
-  if (maxPicks === 1) bits.push(SEND_ONE);
   if (legacyStranded) bits.push(CREATE_STRANDED);
   if (altAa && aaSource === 'ours') bits.push(ALSO_OLDER);
   if (altAa && aaSource === 'legacy') bits.push(ALSO_OURS);
@@ -605,6 +617,10 @@ function pageSnapshot() {
   if (box) box.hidden = true;
   const tokens = root.querySelector('#tokens');
   if (tokens) tokens.textContent = '';
+  const hm = root.querySelector('#histMore');
+  if (hm) hm.hidden = true;
+  const hf = root.querySelector('#histFloor');
+  if (hf) hf.hidden = true;
   for (const b of root.querySelectorAll('[data-copied]')) b.removeAttribute('data-copied');
   return '<!DOCTYPE html>\n' + root.outerHTML;
 }
@@ -741,10 +757,13 @@ function disconnect() {
   $('amtEp').value = '';
   $('hist').replaceChildren();
   $('histEmpty').hidden = false;
+  $('tokEmpty').hidden = true;
+  $('tokMore').hidden = true;
   $('takeEth').checked = false;
   $('takeEp').checked = false;
   clearReceipt();
   renderTokens();
+  paintHistMore();
   paintConnect();
   showSkill();
   paintTab('wallet');
@@ -924,7 +943,7 @@ function lsCur(prefix, blank, set) {
 }
 
 function tokCur(set) {
-  return lsCur(LS_TOK, () => ({ b: 0, t: -1, a: [] }), set);
+  return lsCur(LS_TOK, () => ({ b: 0, t: -1, f: -1, a: [] }), set);
 }
 
 async function scanCtx() {
@@ -938,8 +957,10 @@ async function scanCtx() {
     try {
       birth = await accountBirth(aa, latest);
     } catch {
-      // non-archive public nodes fail the code walk; stay inside a head window they still serve
-      birth = Math.max(0, latest - LOGS_LOOKBACK);
+      // Non-archive public nodes fail the code walk, so birth stays unknown (0).
+      // The first pass still caps itself to latest - LOGS_LOOKBACK inside
+      // scanAccountLogs; older history resumes through Scan further.
+      birth = 0;
     }
   }
   return { latest, birth, fork };
@@ -975,10 +996,131 @@ async function hydrateTokens(addrs, live) {
   }
 }
 
+/** High-cap tokens hold their balance in the contract, not in logs — probe them at head.
+ *  Skipped on the local fork: the seeded list is the source of truth there. */
+async function discoverMajors(cur, live) {
+  if (forkCfg()) return false;
+  const list = (CHAINS[chainId]?.majors || []).map((a) => a.toLowerCase()).filter((a) => !cur.a.includes(a));
+  let found = false;
+  for (let i = 0; i < list.length; i += 8) {
+    if (live && !live()) return found;
+    for (const t of await Promise.all(list.slice(i, i + 8).map(readErc20))) {
+      if (t.bal > 0n) {
+        found = true;
+        cur.a.push(t.address.toLowerCase());
+        tokMeta.set(t.address.toLowerCase(), { symbol: t.symbol, decimals: t.decimals });
+      }
+    }
+  }
+  return found;
+}
+
+function tokScanHint(e) {
+  const msg = (e && e.message) || 'Couldn’t list tokens.';
+  if (pruneFloor(msg)) return PRUNE_HINT;
+  const custom = ($('rpcIn').value || localStorage.getItem(LS_RPC + chainId) || '').trim();
+  // getLogs already rewrites an all-stall scan into a Custom RPC pointer — don't suffix it twice.
+  if (custom || timeoutLogsMsg(msg)) return msg;
+  return msg + ' Custom RPC is in the header if a public node stalled.';
+}
+
+function collectTokLogs(cur, logs, fresh) {
+  for (const l of logs || []) {
+    if ((l.topics || []).length !== 3) continue;
+    const a = '0x' + String(l.address).slice(-40).toLowerCase();
+    if (!cur.a.includes(a)) {
+      cur.a.push(a);
+      if (fresh) fresh.push(a);
+    }
+  }
+}
+
+/**
+ * Deep Transfer-in walk, decoupled from Activity: newest page first, from the
+ * unscanned head and the persisted floor down toward birth. One budgeted pass at
+ * a time; a fast (custom/archive) node keeps passing, a slow public hands back
+ * with 'budget'. Nodes that cannot serve the range at all answer 'wall'.
+ */
+async function runTokWalk(scan, cur, live, quiet) {
+  const custom = !!($('rpcIn').value || localStorage.getItem(LS_RPC + chainId) || '').trim();
+  const cfg = custom ? TOK_WALK_CUSTOM : TOK_WALK_PUBLIC;
+  const deep = scan.latest - scan.birth > LOGS_LOOKBACK;
+  const persist = () => tokCur({ b: scan.birth, t: cur.t, f: cur.f, a: cur.a });
+  for (let pass = 0; pass < cfg.passes; pass++) {
+    if (!live()) return 'done';
+    const needHead = cur.f >= 0 && cur.t + 1 <= scan.latest;
+    const top = cur.f >= 0 ? cur.f - 1 : scan.latest;
+    if (!needHead && top < scan.birth) return 'done';
+    if (!quiet && deep) setStatus(TOK_SCANNING);
+    const budget = { pages: cfg.pages, ms: cfg.ms, t0: Date.now(), used: 0 };
+    const fresh = [];
+    let stopped = '';
+    let done = false;
+    try {
+      if (needHead) {
+        const r = await walkTransfersIn(cur.t + 1, scan.latest, aa, {
+          budget,
+          live,
+          onPage: (logs, a, b) => {
+            if (!live()) return;
+            collectTokLogs(cur, logs, fresh);
+            cur.t = b;
+            persist();
+          },
+        });
+        stopped = r.stopped;
+        if (!live()) return 'done';
+      }
+      if (!stopped && top >= scan.birth) {
+        const r = await walkTransfersIn(scan.birth, top, aa, {
+          budget,
+          descend: true,
+          live,
+          onPage: (logs, a, b) => {
+            if (!live()) return;
+            collectTokLogs(cur, logs, fresh);
+            cur.f = a;
+            if (cur.t < b) cur.t = b;
+            persist();
+          },
+        });
+        stopped = r.stopped;
+        done = r.done;
+      } else if (top < scan.birth) {
+        done = !stopped;
+      }
+    } catch (e) {
+      if (e && e.unserved) return 'wall';
+      throw e;
+    }
+    if (!live()) return 'done';
+    if (fresh.length) await hydrateTokens(fresh, live);
+    if (done) return 'done';
+    // A pass stopped by the clock means a slow node — hand back instead of looping.
+    if (stopped !== 'pages') return 'budget';
+  }
+  return 'budget';
+}
+
+function paintTokEmpty(state, cur, scan) {
+  const empty = $('tokEmpty');
+  const more = $('tokMore');
+  more.hidden = state !== 'budget';
+  if (state === 'done') {
+    empty.hidden = tokens.length > 0;
+    empty.textContent = tokens.length ? '' : 'No tokens on this account yet.';
+    return;
+  }
+  empty.hidden = false;
+  empty.textContent = state === 'wall' ? TOK_WALL : cur.f >= 0 && cur.t >= scan.latest ? tokMoreHint(cur.f) : TOK_CATCHUP;
+}
+
 async function discoverTokens(quiet, live, scanP) {
   const empty = $('tokEmpty');
   empty.hidden = true;
+  $('tokMore').hidden = true;
   const cur = tokCur();
+  if (typeof cur.f !== 'number') cur.f = -1;
   const seeded = forkCfg();
   if (seeded?.tokens) {
     for (const t of seeded.tokens) {
@@ -987,30 +1129,34 @@ async function discoverTokens(quiet, live, scanP) {
     }
   }
   const hydrateP = cur.a.length ? hydrateTokens(cur.a, live) : Promise.resolve();
-  const scan = await scanP;
+  if (await discoverMajors(cur, live)) tokCur({ ...tokCur(), a: cur.a });
+  if (!live()) return;
+  let scan;
+  try {
+    scan = await scanP;
+  } catch (e) {
+    if (!live()) return;
+    // Errors are toast-only; the empty state stays neutral instead of doubling the message.
+    const hint = tokScanHint(e);
+    empty.hidden = tokens.length > 0;
+    empty.textContent = tokens.length ? '' : 'Couldn’t check for tokens just now.';
+    if (!quiet) setStatus(hint, 'err');
+    return;
+  }
   if (!live()) return;
   await hydrateP;
   if (!live()) return;
-  if (scan.fork) tokCur({ b: scan.birth, t: scan.latest, a: cur.a });
-  const from = cur.t >= scan.birth ? cur.t + 1 : scan.birth;
-  if (scan.logs && from <= scan.latest) {
+  let state = 'done';
+  if (scan.fork) {
+    tokCur({ b: scan.birth, t: scan.latest, f: scan.birth, a: cur.a });
+  } else {
     try {
-      for (const l of scan.logs.ins) {
-        if ((l.topics || []).length !== 3) continue;
-        if (Number(l.blockNumber) < from) continue;
-        const a = '0x' + String(l.address).slice(-40).toLowerCase();
-        if (!cur.a.includes(a)) cur.a.push(a);
-      }
-      if (!live()) return;
-      tokCur({ b: scan.birth, t: scan.latest, a: cur.a });
+      state = await runTokWalk(scan, cur, live, quiet);
     } catch (e) {
       if (!live()) return;
-      const custom = ($('rpcIn').value || localStorage.getItem(LS_RPC + chainId) || '').trim();
-      const hint = custom
-        ? e.message || 'Couldn’t list tokens.'
-        : (e.message || 'Couldn’t list tokens.') + ' Custom RPC is in the header if a public node stalled.';
+      const hint = tokScanHint(e);
       empty.hidden = tokens.length > 0;
-      empty.textContent = tokens.length ? '' : hint;
+      empty.textContent = tokens.length ? '' : 'Couldn’t check for tokens just now.';
       if (!quiet) setStatus(hint, 'err');
       return;
     }
@@ -1018,8 +1164,91 @@ async function discoverTokens(quiet, live, scanP) {
   if (!live()) return;
   await hydrateTokens(cur.a, live);
   if (!live()) return;
-  empty.hidden = tokens.length > 0;
-  empty.textContent = tokens.length ? '' : 'No tokens on this account yet.';
+  paintTokEmpty(state, cur, scan);
+}
+
+/** Blocks walked per Scan further pass (20 getLogs spans). */
+const BACKFILL_SPAN = 200000;
+let backfilling = false;
+
+/** Activity frontier lives on the history cache; tokCur.f is the token walk's cursor. */
+function histBound(hc) {
+  return Math.max(hc.b || 0, hc.fl || 0);
+}
+
+function paintHistMore() {
+  const btn = $('histMore');
+  if (!btn) return;
+  const hc = histCur();
+  const f = Number.isFinite(hc.f) ? hc.f : -1;
+  const more = !!aa && f > histBound(hc);
+  btn.hidden = !more;
+  const floored = !!aa && !more && (hc.fl || 0) > (hc.b || 0);
+  const note = $('histFloor');
+  note.hidden = !floored;
+  if (floored) note.textContent = `This node keeps history from block ${hc.fl} on. Paste an archive RPC in the header for older activity.`;
+}
+
+/** Walk one span older than the scanned frontier, merging tokens and activity. */
+async function backfill(quiet) {
+  if (!aa || backfilling) return;
+  const hc = histCur();
+  const bound = histBound(hc);
+  const f = Number.isFinite(hc.f) ? hc.f : -1;
+  if (f <= bound) {
+    paintHistMore();
+    return;
+  }
+  backfilling = true;
+  const btn = $('histMore');
+  btn.disabled = true;
+  const mine = aa;
+  const live = () => eq(aa, mine);
+  const lo = Math.max(bound, f - BACKFILL_SPAN);
+  try {
+    if (!quiet) setStatus(`Scanning blocks ${lo}–${f - 1}…`);
+    const pack = await scanRangeLogs(lo, f - 1, mine);
+    if (!live()) return;
+    const eff = Math.max(lo, pack.floor || 0);
+    const cur = tokCur();
+    for (const l of pack.ins) {
+      if ((l.topics || []).length !== 3) continue;
+      const a = '0x' + String(l.address).slice(-40).toLowerCase();
+      if (!cur.a.includes(a)) cur.a.push(a);
+    }
+    tokCur({ ...cur, a: cur.a });
+    const hp = { ...histCur(), f: eff };
+    if (pack.floor) hp.fl = pack.floor;
+    histCur(hp);
+    await backfillHist(pack, live);
+    if (!live()) return;
+    await hydrateTokens(cur.a, live);
+    if (pack.floor) setStatus(`This node keeps history from block ${pack.floor} on. An archive Custom RPC goes further.`);
+    else if (!quiet) setStatus(`Scanned back to block ${eff}.`, 'ok');
+  } catch (e) {
+    if (!quiet && live()) setStatus(e.message || 'Scan failed.', 'err');
+    throw e;
+  } finally {
+    backfilling = false;
+    btn.disabled = false;
+    paintHistMore();
+  }
+}
+
+/** Deep-receipts nodes keep walking on their own; shallow nodes wait for the button.
+ *  Each pass strictly lowers the frontier or raises the floor, so this self-terminates. */
+async function autoBackfill() {
+  if (!rpcHasDeepLogs()) return;
+  for (;;) {
+    const hc = histCur();
+    const f = Number.isFinite(hc.f) ? hc.f : -1;
+    if (!aa || f <= histBound(hc)) break;
+    try {
+      await backfill(true);
+    } catch {
+      break;
+    }
+  }
 }
 
 async function refreshAccount(opts) {
@@ -1154,8 +1383,16 @@ async function refreshAccount(opts) {
   });
   await Promise.all([discoverTokens(quiet, live, scanP), discoverHist(quiet, live, scanP)]);
   if (!live()) return;
+  const sp = await scanP;
+  if (sp.logs && !sp.fork) {
+    const hc = histCur();
+    const f = Math.min(Number.isFinite(hc.f) ? hc.f : Infinity, sp.logs.head ?? sp.latest + 1);
+    if (f !== hc.f) histCur({ ...hc, f });
+  }
+  paintHistMore();
+  autoBackfill().catch(() => {});
   await prefillMaxes().catch(() => {});
-  const clipped = !!(await scanP).logs?.clipped;
+  const clipped = !!sp.logs?.clipped;
   if (quiet) return;
   if (eoaWei === 0n) {
     setStatus(EMPTY_WALLET, 'err');
@@ -1394,10 +1631,12 @@ $('aaAct').onclick = () => {
 $('destMe').onclick = () => fillDestMe();
 $('destHint').onclick = () => fillDestMe(1);
 $('tokAll').onclick = () => toggleSelectAll().catch((e) => setHint('amtErr', e.message || 'Couldn’t select.'));
+$('tokMore').onclick = () => refreshAccount().catch((e) => setStatus(e.message, 'err'));
 $('copyAa').onclick = () => copyAa().catch((e) => setStatus(e.message, 'err'));
 $('copySkill').onclick = () => copySkill().catch((e) => setStatus(e.message, 'err'));
 $('copyHost').onclick = () => copyHost().catch((e) => setStatus(e.message, 'err'));
 $('copyCast').onclick = () => copyCast().catch((e) => setStatus(e.message, 'err'));
+$('histMore').onclick = () => backfill(false).catch(() => {});
 $('hostSave').onclick = () => savePage().catch((e) => setStatus(e.message || 'Couldn’t save this page.', 'err'));
 $('rpcAdd').onclick = () => paintRpc($('rpcBox').hidden);
 $('rpcIn').onchange = () => {
@@ -1405,8 +1644,12 @@ $('rpcIn').onchange = () => {
   if (v) localStorage.setItem(LS_RPC + chainId, v);
   else localStorage.removeItem(LS_RPC + chainId);
   if (aa) {
-    tokCur({ ...tokCur(), t: -1 });
-    histCur({ ...histCur(), t: -1 });
+    tokCur({ ...tokCur(), t: -1, f: -1 });
+    const hc = histCur();
+    delete hc.f;
+    delete hc.fl;
+    hc.t = -1;
+    histCur(hc);
   }
   setRpcUrl('');
   paintRpc(true);
@@ -1431,9 +1674,16 @@ $('assets').oninput = () => {
 $('assets').onchange = (e) => {
   if (e.target.type === 'checkbox') {
     if (maxPicks === 1 && e.target.checked) {
+      // Single-asset account: the new pick quietly replaces the old one.
+      // The note only appears when the user actually tries to batch.
+      let bumped = 0;
       for (const box of $('assets').querySelectorAll('input[type="checkbox"]')) {
-        if (box !== e.target) box.checked = false;
+        if (box !== e.target && box.checked) {
+          box.checked = false;
+          bumped++;
+        }
       }
+      if (bumped) setStatus(SEND_ONE);
     }
     prefillMaxes().catch((err) => setHint('amtErr', err.message || 'Couldn’t fill Max.'));
   }

@@ -122,7 +122,7 @@ window.addEventListener('load',async()=>{
       document.documentElement.setAttribute('data-host-ep',(document.getElementById('epBal')?.textContent||'').trim());
       document.documentElement.setAttribute('data-host-tokens',String(nTok));
       document.documentElement.setAttribute('data-host-on',document.body.classList.contains('on')?'1':'0');
-      if(nTok>0 || i>40) return;
+      if(nTok>0 || i>76) return;
     }
     const note=(document.getElementById('note')?.textContent||'').trim();
     if(note) document.documentElement.setAttribute('data-host-err',note.slice(0,240));

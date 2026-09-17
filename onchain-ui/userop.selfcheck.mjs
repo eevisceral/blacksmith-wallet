@@ -38,6 +38,7 @@ import {
   isBlockedDest,
   isAddress,
   pageHostFromLocation,
+  PAGE_HOST,
   CHAINS,
   ZERO_ADDR,
   ETH_PLACEHOLDER,
@@ -52,7 +53,7 @@ import {
   topicAddress,
 } from './kernel.mjs';
 import { renderMd, fillSkill, esc, short, hex, word, fmtAmt } from './util.mjs';
-import { decodeStr, logsFrom, getRpcUrl, getRpcAlts, setRpcUrl, archiveLogsMsg, addrRequiredLogsMsg, rangeLogsMsg, LOGS_RANGE_MAX, LOGS_LOOKBACK } from './rpc.mjs';
+import { decodeStr, logsFrom, getRpcUrl, getRpcAlts, setRpcUrl, archiveLogsMsg, addrRequiredLogsMsg, rangeLogsMsg, pruneFloor, transientRpcMsg, timeoutLogsMsg, unservedLogsMsg, getLogs, walkTransfersIn, scanAccountLogs, TOK_WALK_PUBLIC, TOK_WALK_CUSTOM, LOGS_RANGE_MAX, LOGS_LOOKBACK, LOGS_TIMEOUT_PUBLIC, LOGS_TIMEOUT_CUSTOM } from './rpc.mjs';
 import { HIST_CAP, HIST_V, HIST_TS } from './history.mjs';
 import { getPendingTx, setPendingTx, forgetPendingTx, sendFail } from './send.mjs';
 import { readFileSync, existsSync } from 'node:fs';
@@ -134,6 +135,34 @@ if (!rangeLogsMsg('block span 120000 of range [1, 120001] exceeds the limit 1000
 if (!rangeLogsMsg('ranges over 10000 blocks are not supported on free plan')) {
   console.error('FAIL rangeLogsMsg dRPC ranges over');
   process.exit(1);
+}
+eq(
+  'pruneFloor parses the receipts floor',
+  pruneFloor('old data not available due to pruning: requested block 25609173, history is available from block 25735899'),
+  25735899
+);
+if (pruneFloor('execution reverted') !== 0 || pruneFloor('history is not available due to pruning') !== -1) {
+  console.error('FAIL pruneFloor must distinguish floor-less pruning and non-pruning errors');
+  process.exit(1);
+}
+if (!transientRpcMsg('internal error: relay request failed with status code 408 after 2 attempts')) {
+  console.error('FAIL transientRpcMsg must catch relay 408');
+  process.exit(1);
+}
+if (!transientRpcMsg('RPC HTTP 503') || !transientRpcMsg('bad gateway')) {
+  console.error('FAIL transientRpcMsg must catch 5xx and gateway errors');
+  process.exit(1);
+}
+if (transientRpcMsg('execution reverted') || transientRpcMsg('insufficient funds')) {
+  console.error('FAIL transientRpcMsg must not swallow real reverts');
+  process.exit(1);
+}
+for (const id of [1, 8453]) {
+  const m = CHAINS[id].majors;
+  if (!Array.isArray(m) || m.length < 20 || m.some((a) => !isAddress(a))) {
+    console.error('FAIL CHAINS majors must be 20+ valid token addresses per chain');
+    process.exit(1);
+  }
 }
 eq('handleOps selector', HANDLE_OPS_SEL, '1fad948c');
 {
@@ -565,6 +594,8 @@ for (const s of [
   'id="tokAll"',
   'id="tokAdd"',
   'id="tokenIn"',
+  'id="tokMore"',
+  'Scan further',
   'Custom token',
   'tok-open',
   'id="i-ext"',
@@ -624,17 +655,31 @@ if (HIST_CAP !== 256 || HIST_V !== 2 || HIST_TS !== 24) {
   console.error('FAIL HIST_CAP/V/TS');
   process.exit(1);
 }
-if (!CHAINS[1]?.rpcs?.length || !CHAINS[8453]?.rpcs?.length) {
-  console.error('FAIL CHAINS must list public RPCs for Ethereum and Base');
-  process.exit(1);
-}
-if (CHAINS[1].rpcs[0] !== 'https://gateway.tenderly.co/public/mainnet' || CHAINS[8453].rpcs[0] !== 'https://base.rpc.sentio.xyz') {
-  console.error('FAIL CHAINS snapshot must lead with probed Chainlist URLs');
-  process.exit(1);
-}
-if (CHAINS[1].rpcs.some((u) => /publicnode|drpc\.org/i.test(u)) || CHAINS[8453].rpcs.some((u) => /publicnode|drpc\.org/i.test(u))) {
-  console.error('FAIL CHAINS must not pin Allnodes/dRPC');
-  process.exit(1);
+{
+  // Deep-receipts probed 2026-09-17: every URL served unaddressed 2023 Transfer logs.
+  const want = {
+    1: [
+      'https://gateway.tenderly.co/public/mainnet',
+      'https://ethereum-public.nodies.app',
+      'https://ethereum.public.blockpi.network/v1/rpc/public',
+      'https://mainnet.rpc.sentio.xyz',
+      'https://eth.api.pocket.network',
+    ],
+    8453: [
+      'https://base.rpc.sentio.xyz',
+      'https://base-public.nodies.app',
+      'https://base-mainnet.public.blastapi.io',
+      'https://mainnet.base.org',
+      'https://gateway.tenderly.co/public/base',
+    ],
+  };
+  for (const id of [1, 8453]) {
+    const got = CHAINS[id]?.rpcs || [];
+    if (got.length !== want[id].length || got.some((u, i) => u !== want[id][i])) {
+      console.error(`FAIL CHAINS[${id}] must pin the keyless Chainlist snapshot in order\n got ${got.join(' ')}`);
+      process.exit(1);
+    }
+  }
 }
 eq('esc', esc('<x&y>'), '&lt;x&amp;y&gt;');
 eq('short', short('0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266'), '0xf39F…2266');
@@ -668,12 +713,253 @@ eq('decodeStr packed', decodeStr('0x' + Buffer.from('USDC\0').toString('hex')), 
     process.exit(1);
   }
 }
-setRpcUrl('https://example.invalid', ['https://0xrpc.io/eth']);
+setRpcUrl('https://example.invalid', ['https://alt.invalid']);
 eq('getRpcUrl', getRpcUrl(), 'https://example.invalid');
-eq('getRpcAlts', getRpcAlts().join(','), 'https://0xrpc.io/eth');
+eq('getRpcAlts', getRpcAlts().join(','), 'https://alt.invalid');
 setRpcUrl('');
 if (getRpcAlts().length) {
   console.error('FAIL setRpcUrl clears alts');
+  process.exit(1);
+}
+
+if (!timeoutLogsMsg('signal timed out') || !timeoutLogsMsg('The operation timed out.') || !timeoutLogsMsg('This operation was aborted')) {
+  console.error('FAIL timeoutLogsMsg must catch abort/timeout text');
+  process.exit(1);
+}
+if (timeoutLogsMsg('rate limit') || timeoutLogsMsg('web page instead') || timeoutLogsMsg('')) {
+  console.error('FAIL timeoutLogsMsg must not catch rate-limit or fatal text');
+  process.exit(1);
+}
+if (!timeoutLogsMsg(LOGS_TIMEOUT_PUBLIC) || !timeoutLogsMsg(LOGS_TIMEOUT_CUSTOM)) {
+  console.error('FAIL friendly timeout copy must classify as timeout (no double Custom RPC suffix)');
+  process.exit(1);
+}
+{
+  const realFetch = globalThis.fetch;
+  const res = (result) => ({ ok: true, text: async () => JSON.stringify({ jsonrpc: '2.0', id: 1, result }) });
+  const log = { blockNumber: '0xa', transactionHash: '0x' + 'ab'.repeat(32), address: '0x' + '11'.repeat(20), topics: [], data: '0x' };
+  const timeoutErr = () => new DOMException('signal timed out', 'TimeoutError');
+  const abortErr = () => new DOMException('The operation was aborted', 'AbortError');
+  let hits = [];
+  const stub = (fn) => {
+    hits = [];
+    globalThis.fetch = async (u) => {
+      hits.push(u);
+      return fn(u);
+    };
+  };
+  try {
+    // A timed-out public URL fails over to the next one (was fatal: "signal timed out").
+    stub((u) => {
+      if (u === 'https://one.invalid') throw timeoutErr();
+      return res([log]);
+    });
+    setRpcUrl('https://one.invalid', ['https://two.invalid']);
+    const got = await getLogs(10, 20, [TRANSFER_TOPIC]);
+    // jrpc retries the stalled URL once, then the page fails over.
+    if (got.length !== 1 || hits.join(' ') !== 'https://one.invalid https://one.invalid https://two.invalid') {
+      console.error('FAIL getLogs must treat a timeout as retryable and fail over', hits);
+      process.exit(1);
+    }
+    // AbortError (no timeout text) is retryable too, and the answering URL leads later pages.
+    stub((u) => {
+      if (u === 'https://one.invalid') throw abortErr();
+      return res([log]);
+    });
+    const wide = await getLogs(10, 10 + LOGS_RANGE_MAX + 1, [TRANSFER_TOPIC]);
+    if (wide.length !== 2 || hits.filter((u) => u === 'https://one.invalid').length !== 2 || hits[hits.length - 1] !== 'https://two.invalid') {
+      console.error('FAIL getLogs must retry aborts and promote the answering URL for later pages', hits);
+      process.exit(1);
+    }
+    // Every public path stalling surfaces the Custom RPC pointer, never raw "signal timed out".
+    stub(() => {
+      throw timeoutErr();
+    });
+    let msg = '';
+    try {
+      await getLogs(10, 20, [TRANSFER_TOPIC]);
+    } catch (e) {
+      msg = e.message || '';
+    }
+    if (msg !== LOGS_TIMEOUT_PUBLIC || /signal timed out/i.test(msg)) {
+      console.error('FAIL all-stall public scan must show the Custom RPC pointer\n got', msg);
+      process.exit(1);
+    }
+    // Custom RPC is exclusive: one URL, its own timeout copy, no public fall-through.
+    stub(() => {
+      throw timeoutErr();
+    });
+    setRpcUrl('https://custom.invalid', []);
+    msg = '';
+    try {
+      await getLogs(10, 20, [TRANSFER_TOPIC]);
+    } catch (e) {
+      msg = e.message || '';
+    }
+    // One retry on the exclusive custom URL, never a public fall-through.
+    if (msg !== LOGS_TIMEOUT_CUSTOM || hits.length !== 2 || hits[0] !== 'https://custom.invalid') {
+      console.error('FAIL custom RPC timeout must not fall through to public\n got', msg, hits);
+      process.exit(1);
+    }
+    // Fatal replies still refuse failover.
+    stub((u) => (u === 'https://one.invalid' ? { ok: true, text: async () => '<!DOCTYPE html>' } : res([log])));
+    setRpcUrl('https://one.invalid', ['https://two.invalid']);
+    msg = '';
+    try {
+      await getLogs(10, 20, [TRANSFER_TOPIC]);
+    } catch (e) {
+      msg = e.message || '';
+    }
+    if (!/web page instead/i.test(msg) || hits.length !== 1) {
+      console.error('FAIL fatal getLogs errors must not fail over', msg, hits);
+      process.exit(1);
+    }
+  } finally {
+    globalThis.fetch = realFetch;
+    setRpcUrl('');
+  }
+}
+
+if (!unservedLogsMsg('pruned history unavailable') || !unservedLogsMsg('method not available')) {
+  console.error('FAIL unservedLogsMsg must catch prune walls and dropped methods');
+  process.exit(1);
+}
+if (unservedLogsMsg('signal timed out') || unservedLogsMsg('rate limit') || unservedLogsMsg('')) {
+  console.error('FAIL unservedLogsMsg must not catch stalls or transient text');
+  process.exit(1);
+}
+
+{
+  // Token discovery walk: no LOGS_LOOKBACK ceiling, newest page first, soft budget, wall marker.
+  const realFetch = globalThis.fetch;
+  const AA2 = '0x' + '22'.repeat(20);
+  const pad2 = topicAddress(AA2);
+  const tokAddr = '0x' + '33'.repeat(20);
+  const oldLog = {
+    blockNumber: '0x64',
+    transactionHash: '0x' + 'cd'.repeat(32),
+    address: tokAddr,
+    topics: [TRANSFER_TOPIC, '0x' + '00'.repeat(32), pad2],
+    data: '0x' + '1'.padStart(64, '0'),
+  };
+  const res = (result) => ({ ok: true, text: async () => JSON.stringify({ jsonrpc: '2.0', id: 1, result }) });
+  const LATEST = 250000; // more than 2 × LOGS_LOOKBACK
+  const budget = (pages, ms) => ({ pages, ms, t0: Date.now(), used: 0 });
+  try {
+    let calls = [];
+    globalThis.fetch = async (u, init) => {
+      const body = JSON.parse(init.body);
+      if (body.method !== 'eth_getLogs') return res('0x0');
+      const q = body.params[0];
+      const from = parseInt(q.fromBlock, 16);
+      const to = parseInt(q.toBlock, 16);
+      calls.push([from, to]);
+      const hit = from <= 100 && to >= 100 && (q.topics || [])[2] === pad2 && !q.address;
+      return res(hit ? [oldLog] : []);
+    };
+    setRpcUrl('https://deep.invalid', []);
+    // Birth-era receive is outside the Activity lookback: the walk must still reach it.
+    const pages = [];
+    const walk = await walkTransfersIn(1, LATEST, AA2, {
+      budget: budget(100, 60000),
+      descend: true,
+      onPage: (logs, a, b) => pages.push([a, b]),
+    });
+    if (!walk.done || walk.stopped) {
+      console.error('FAIL deep walk must complete inside a generous budget', walk.stopped);
+      process.exit(1);
+    }
+    if (pages.length !== 25 || pages[0][0] !== 240001 || pages[0][1] !== LATEST || pages[24][0] !== 1) {
+      console.error('FAIL deep walk must page newest-first down to birth', pages[0], pages[pages.length - 1], pages.length);
+      process.exit(1);
+    }
+    if (!walk.logs.some((l) => String(l.address).toLowerCase() === tokAddr && Number(l.blockNumber) === 100)) {
+      console.error('FAIL deep walk must surface the birth-era Transfer-in');
+      process.exit(1);
+    }
+    if (calls.some(([from]) => from < 1) || !calls.some(([from]) => from < LATEST - LOGS_LOOKBACK)) {
+      console.error('FAIL deep walk must not be clipped to the Activity lookback');
+      process.exit(1);
+    }
+    // The same node, same account: Activity (scanAccountLogs) stays inside the recent window.
+    calls = [];
+    const pack = await scanAccountLogs(1, LATEST, AA2);
+    if (!pack.clipped) {
+      console.error('FAIL scanAccountLogs must still clip to LOGS_LOOKBACK');
+      process.exit(1);
+    }
+    if (calls.some(([from]) => from < LATEST - LOGS_LOOKBACK)) {
+      console.error('FAIL Activity scan must not walk below the recent window');
+      process.exit(1);
+    }
+    if (pack.ins.length !== 0) {
+      console.error('FAIL lookback-only Activity scan must miss the birth-era receive (walk covers it)');
+      process.exit(1);
+    }
+    // Page budget stops newest-first and reports early-of-birth instead of hanging.
+    const pages2 = [];
+    const w2 = await walkTransfersIn(1, LATEST, AA2, {
+      budget: budget(3, 60000),
+      descend: true,
+      onPage: (logs, a, b) => pages2.push([a, b]),
+    });
+    if (w2.done || w2.stopped !== 'pages' || pages2.length !== 3 || pages2[2][1] !== 230000) {
+      console.error('FAIL walk page budget must stop after 3 newest pages', w2.stopped, pages2.length);
+      process.exit(1);
+    }
+    // Time budget stops before the first page when it is already spent.
+    const w3 = await walkTransfersIn(1, LATEST, AA2, { budget: { pages: 100, ms: 0, t0: Date.now() - 1, used: 0 }, descend: true });
+    if (w3.done || w3.stopped !== 'ms' || w3.logs.length !== 0) {
+      console.error('FAIL walk time budget must stop a slow scan', w3.stopped);
+      process.exit(1);
+    }
+    // A dead session halts the walk without another page.
+    const w4 = await walkTransfersIn(1, LATEST, AA2, { budget: budget(100, 60000), descend: true, live: () => false });
+    if (w4.done || w4.stopped !== 'halt') {
+      console.error('FAIL walk must halt when the session is stale', w4.stopped);
+      process.exit(1);
+    }
+    // Every node refusing the range is a wall (unserved), never a timeout pointer.
+    globalThis.fetch = async () => {
+      throw new Error('pruned history unavailable');
+    };
+    let err = null;
+    try {
+      await walkTransfersIn(1, 50000, AA2, { budget: budget(5, 60000), descend: true });
+    } catch (e) {
+      err = e;
+    }
+    if (!err || !err.unserved || !/pruned history/i.test(err.message || '')) {
+      console.error('FAIL all-refused walk must throw the range error marked unserved', err && err.message);
+      process.exit(1);
+    }
+    // A stall mixed with a refusal is transient: timeout pointer, no wall marker.
+    setRpcUrl('https://deep.invalid', ['https://stall.invalid']);
+    globalThis.fetch = async (u) => {
+      if (u === 'https://stall.invalid') throw new DOMException('signal timed out', 'TimeoutError');
+      throw new Error('pruned history unavailable');
+    };
+    err = null;
+    try {
+      await walkTransfersIn(1, 50000, AA2, { budget: budget(5, 60000), descend: true });
+    } catch (e) {
+      err = e;
+    }
+    if (!err || err.message !== LOGS_TIMEOUT_PUBLIC || err.unserved) {
+      console.error('FAIL stall+refusal must stay the Custom RPC pointer, not a wall', err && err.message);
+      process.exit(1);
+    }
+  } finally {
+    globalThis.fetch = realFetch;
+    setRpcUrl('');
+  }
+}
+if (TOK_WALK_PUBLIC.pages >= TOK_WALK_CUSTOM.pages || TOK_WALK_PUBLIC.passes >= TOK_WALK_CUSTOM.passes) {
+  console.error('FAIL custom/archive token walk must out-budget the public one');
+  process.exit(1);
+}
+if (PAGE_HOST !== '') {
+  console.error('FAIL PAGE_HOST must stay empty until an operator broadcasts');
   process.exit(1);
 }
 setPendingTx('0xabc');
@@ -699,6 +985,26 @@ if (!app.includes('logs?.clipped') || !app.includes('Showing recent history')) {
   console.error('FAIL public log failover and recent-history copy');
   process.exit(1);
 }
+if (!app.includes('discoverMajors') || !app.includes('backfillHist') || !page.includes('id="histMore"')) {
+  console.error('FAIL majors probe and Scan further backfill must be wired');
+  process.exit(1);
+}
+if (!rpcSrc.includes('pruneFloor') || !rpcSrc.includes('rpcHasDeepLogs') || !rpcSrc.includes('scanRangeLogs')) {
+  console.error('FAIL rpc must clamp pruning floors and prefer deep-receipts nodes');
+  process.exit(1);
+}
+{
+  const hist = readFileSync(join(dir, 'history.mjs'), 'utf8');
+  if (!hist.includes('mergeQ') || !/pushHist[\s\S]*?mergeQ = mergeQ/.test(hist)) {
+    console.error('FAIL history merges and pushHist must serialize through mergeQ');
+    process.exit(1);
+  }
+  const pruneCopies = (app.match(/keeps recent history only/g) || []).length + (hist.match(/keeps recent history only/g) || []).length;
+  if (pruneCopies > 0 || !rpcSrc.includes('PRUNE_HINT')) {
+    console.error('FAIL pruning toast copy must live once in rpc.mjs as PRUNE_HINT');
+    process.exit(1);
+  }
+}
 if (app.includes('No recent token transfers') || app.includes('No recent activity on this node') || app.includes('add a token by address')) {
   console.error('FAIL clip copy must be one toast, not empty-state duplicates');
   process.exit(1);
@@ -715,6 +1021,14 @@ if (!app.includes('maxPicks') || !app.includes('This account sends one asset at 
   console.error('FAIL 0.2.1 must not Select-all batch');
   process.exit(1);
 }
+if (app.includes('bits.push(SEND_ONE)') || !app.includes('if (bumped) setStatus(SEND_ONE)')) {
+  console.error('FAIL one-asset note must be progressive disclosure on batch attempt, not a banner');
+  process.exit(1);
+}
+if (app.includes("empty.textContent = tokens.length ? '' : hint")) {
+  console.error('FAIL token empty state must not duplicate the toast error');
+  process.exit(1);
+}
 if (!app.includes('accountNote')) {
   console.error('FAIL aa notes must compose stranded with execute-only');
   process.exit(1);
@@ -722,6 +1036,32 @@ if (!app.includes('accountNote')) {
 if (!app.includes('latest - LOGS_LOOKBACK')) {
   console.error('FAIL birth fallback must stay inside public-node log window');
   process.exit(1);
+}
+if (!app.includes('walkTransfersIn') || app.includes('scan.logs.ins')) {
+  console.error('FAIL token discovery must walk Transfer-ins itself, not read the clipped Activity scan');
+  process.exit(1);
+}
+{
+  const scanFn = rpcSrc.slice(rpcSrc.indexOf('async function scanLogs'), rpcSrc.indexOf('TOK_WALK_PUBLIC'));
+  if (!scanFn.includes('descend') || /LOGS_LOOKBACK/.test(scanFn)) {
+    console.error('FAIL the token walk must page newest-first without the Activity lookback ceiling');
+    process.exit(1);
+  }
+}
+if (!app.includes('Scanned back to block') || !app.includes('Scanning older transfers…')) {
+  console.error('FAIL budgeted token scan must say so while scanning and where it stopped');
+  process.exit(1);
+}
+if (!app.includes('Public nodes can’t serve this account’s older blocks')) {
+  console.error('FAIL prune-wall hint must point at paste / Custom RPC');
+  process.exit(1);
+}
+{
+  const at = app.indexOf('No tokens on this account yet.');
+  if (at < 0 || !app.slice(Math.max(0, at - 400), at).includes("state === 'done'")) {
+    console.error('FAIL “No tokens yet” must be gated on a completed scan, never a clipped one');
+    process.exit(1);
+  }
 }
 if (app.includes('Promise.any') || rpcSrc.includes('Promise.any')) {
   console.error('FAIL pickRpc must walk CHAINS URLs in order, not Promise.any');
