@@ -44,4 +44,4 @@ Every chain tool takes an optional `rpc` URL. A custom URL is exclusive — it n
 
 ## Test
 
-From the repo root: `node --test 'mcp/test/*.test.mjs'` (unit + recorded-RPC + a stdio handshake smoke).
+From the repo root: `node --test mcp/test/*.test.mjs` (unit + recorded-RPC + a stdio handshake smoke).
