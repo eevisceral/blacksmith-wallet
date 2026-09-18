@@ -52,3 +52,7 @@ Token discovery is its own walk, not the Activity window: probe the chain's pinn
 ## Selectors
 
 `execute` `51945447` · `executeBatch` `34fcd5be` · `transfer` `a9059cbb` · `withdrawTo` `205c2878` · `getNonce` `35567e1a` · `balanceOf` `70a08231` · `initialize` `d1f57894` · legacy `getAccountAddress` `4d6cb700` · legacy `createAccount` `296601cd` · factory `getAccountAddress` `0d253d76` · factory `createAccount` `5fbfb9cf` · `getUserOpHash` `a6193531` · `handleOps` `1fad948c`
+
+## Agent install
+
+Agents (Cursor, Claude, any MCP client) can do every read in this manual — resolve the account, balances, tokens, activity, a dry-run send draft, a UserOp decode — through the stdio MCP in `mcp/` (zero dependencies, MIT, Node 20+ or bun). Point the client at `node mcp/server.mjs` from a clone of this repo; config and the tool reference are in `mcp/README.md`. The MCP reads chain state and drafts UserOps only: it never holds keys and never broadcasts. Creation, signing, and `handleOps` stay in this wallet — its `wallet_url` tool hands the human the page.

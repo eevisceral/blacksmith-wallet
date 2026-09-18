@@ -7,8 +7,8 @@ import {Deploy} from "../script/Deploy.s.sol";
 
 contract VersionHostTest is Test {
     string internal constant FIXTURE = "<!doctype html><html><body>blacksmith-v1</body></html>";
-    address internal constant PUBLISHED_HOST = 0x52876CaEe76e3eF830894cDF36924Ab58A161d70;
-    bytes32 internal constant PUBLISHED_KECCAK = 0x0930468bb47e3af9a41fb33369acfbb180672aac8bb934cec5b2b4faf6d2a72c;
+    address internal constant PUBLISHED_HOST = 0x293b454C8F84aB7aCfF6da6C481AE4cCAAAC9015;
+    bytes32 internal constant PUBLISHED_KECCAK = 0x27e8cb3b3a275abf42f474c24d6977e3a5920d9b6ec2c9ac34418cf71796bc12;
     address internal constant NICK_FACTORY = 0x4e59b44847b379578588920cA78FbF26c0B4956C;
 
     Deploy internal deployer;

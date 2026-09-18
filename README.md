@@ -41,9 +41,10 @@ Connect an injected wallet (EIP-6963, else `window.ethereum`). After Connect, ER
 
 - `onchain-ui/index.html` + `wallet.css` + `app.mjs` + `kernel.mjs` — source page (`kernel.mjs` is the encoding seam; do not add `@zerodev/sdk`)
 - `onchain-ui/dest.mjs` — dest / 7702 checks
-- `onchain-ui/dist/index.html` — freeze (`SKILL.md` inlined; **5** EIP-170 chunks / **116031** B)
+- `onchain-ui/dist/index.html` — freeze (`SKILL.md` inlined; **5** EIP-170 chunks / **116616** B)
 - `onchain-ui/contracts/` — `AccountFactory` (permissionless Kernel 0.2.4 CREATE2) + `VersionHost` (`html()` / `request()`)
 - `onchain-ui/dev/` — local fork playground (not in the freeze; serves repo-root `SKILL.md` at `/SKILL.md`)
+- `mcp/` — zero-dependency stdio MCP for agents (resolve / balances / tokens / activity / dry-run send draft / UserOp decode; no keys, no broadcast; not in the freeze)
 - `SKILL.md` — operator manual (in-page tab; inlined into the freeze)
 
 Unbundled `index.html` + `app.mjs` needs a static server (`file://` blocks ES modules). Open `dist/index.html` from disk if you want a single file.
@@ -51,13 +52,13 @@ Unbundled `index.html` + `app.mjs` needs a static server (`file://` blocks ES mo
 ## Freeze
 
 ```
-keccak256(utf8(onchain-ui/dist/index.html)) = 0x0930468bb47e3af9a41fb33369acfbb180672aac8bb934cec5b2b4faf6d2a72c
+keccak256(utf8(onchain-ui/dist/index.html)) = 0x27e8cb3b3a275abf42f474c24d6977e3a5920d9b6ec2c9ac34418cf71796bc12
 ```
 
 Predicted VersionHost (CREATE2, Nick factory `0x4e59b44847b379578588920cA78FbF26c0B4956C`; same address on Ethereum and Base; **not live** until an operator broadcasts):
 
 ```
-0x52876CaEe76e3eF830894cDF36924Ab58A161d70
+0x293b454C8F84aB7aCfF6da6C481AE4cCAAAC9015
 ```
 
 Predicted AccountFactory (same CREATE2 factory and compiler pin; no owner; **not live** until an operator broadcasts):
