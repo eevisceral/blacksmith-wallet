@@ -1,0 +1,74 @@
+# blacksmith-v1-wallet — ignore local/private noise; ship source + freeze.
+
+# --- local notes (not published with the source tree) ---
+docs/
+plans/
+PRODUCT.md
+onchain-ui/WALKAWAY.md
+onchain-ui/contracts/audit-report.md
+onchain-ui/contracts/onchain-size-research.md
+onchain-ui/dist/SKILL.md
+
+
+# --- secrets & env ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+
+# --- dependencies ---
+node_modules/
+
+# This package has no runtime deps; ignore lock churn until something is added.
+pnpm-lock.yaml
+package-lock.json
+yarn.lock
+bun.lock
+bun.lockb
+
+# --- OS / editors / agent local ---
+.DS_Store
+Thumbs.db
+*~
+*.swp
+.idea/
+.vscode/
+.impeccable/
+.cursor/
+.scratch/
+.agents/
+.claude/
+
+# --- logs & backups (never commit dumps) ---
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.bak
+*.backup
+*.dump
+*.sql.gz
+
+# --- local QA / dogfood ---
+dogfood-output/
+**/dogfood-output/
+
+# --- unused framework leftovers ---
+.next/
+.swc/
+next-env.d.ts
+tsconfig.tsbuildinfo
+.sentryclirc
+__tests__/
+
+# --- Foundry (see also onchain-ui/contracts/.gitignore) ---
+onchain-ui/contracts/cache/
+onchain-ui/contracts/out/
+onchain-ui/contracts/lib/
+onchain-ui/contracts/broadcast-fork/
+onchain-ui/contracts/broadcast/**/dry-run/
+onchain-ui/contracts/broadcast/*/31337/
+onchain-ui/contracts/report.md
+onchain-ui/contracts/aderyn-report.md

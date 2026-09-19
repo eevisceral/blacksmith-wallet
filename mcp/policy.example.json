@@ -1,0 +1,6 @@
+{
+  "max_native_wei": "100000000000000000",
+  "max_erc20": {},
+  "allow_recipients": [],
+  "require_dry_run_first": true
+}

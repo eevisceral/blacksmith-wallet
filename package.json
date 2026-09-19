@@ -1,0 +1,15 @@
+{
+  "name": "blacksmith-v1-wallet",
+  "private": true,
+  "license": "MIT",
+  "scripts": {
+    "build": "node onchain-ui/build.mjs",
+    "selfcheck": "node onchain-ui/userop.selfcheck.mjs",
+    "test:mcp": "node --test mcp/test/*.test.mjs",
+    "test": "node onchain-ui/userop.selfcheck.mjs && node --test mcp/test/*.test.mjs && cd onchain-ui/contracts && forge test -vv",
+    "test:fork": "node onchain-ui/dev/smoke-fork.mjs",
+    "dev:fork": "node onchain-ui/dev/run.mjs",
+    "dev:fork:base": "node onchain-ui/dev/run.mjs base",
+    "quote:deploy": "node onchain-ui/dev/deploy-cost.mjs"
+  }
+}
