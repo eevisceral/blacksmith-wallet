@@ -7,8 +7,8 @@ import {Deploy} from "../script/Deploy.s.sol";
 
 contract VersionHostTest is Test {
     string internal constant FIXTURE = "<!doctype html><html><body>blacksmith-v1</body></html>";
-    address internal constant PUBLISHED_HOST = 0x51B0456869ec70568B69669b05399B587Ec86FcB;
-    bytes32 internal constant PUBLISHED_KECCAK = 0x4e5ca9176f1a47ebd90aa1f083a8c5d620264f99da2e159bb2d50ba4c042e84b;
+    address internal constant PUBLISHED_HOST = 0x2a551c00ED1015266C30be02617Ec50EF52f27D1;
+    bytes32 internal constant PUBLISHED_KECCAK = 0x19494a836b906d5948978721d6979dc7dad3a2eff02f9195874710eef3b5a797;
     address internal constant NICK_FACTORY = 0x4e59b44847b379578588920cA78FbF26c0B4956C;
 
     Deploy internal deployer;
@@ -142,7 +142,7 @@ contract VersionHostTest is Test {
         assertNotEq(uint8(raw[0]), 0xef);
         assertEq(keccak256(raw), PUBLISHED_KECCAK);
         (bytes[] memory parts,) = _split(raw);
-        assertEq(parts.length, 5);
+        assertEq(parts.length, 6);
         address[] memory chunks = new address[](parts.length);
         for (uint256 i; i < parts.length; ++i) {
             chunks[i] = deployer.deployChunk(parts[i]);
@@ -156,7 +156,7 @@ contract VersionHostTest is Test {
         _etchNickFactory();
         bytes memory raw = _requireDist();
         (bytes[] memory parts, address[] memory predictedChunks) = _split(raw);
-        assertEq(parts.length, 5);
+        assertEq(parts.length, 6);
         address[] memory chunks = new address[](parts.length);
         for (uint256 i; i < parts.length; ++i) {
             bytes memory initcode = deployer.chunkInitcode(parts[i]);

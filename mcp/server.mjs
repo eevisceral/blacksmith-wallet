@@ -6,11 +6,11 @@
 import { createInterface } from 'node:readline';
 import { TOOLS, callTool } from './tools.mjs';
 
-const SERVER_INFO = { name: 'blacksmith-v1-wallet', version: '0.1.0' };
+const SERVER_INFO = { name: 'blacksmith-v1-wallet', version: '0.2.0' };
 const INSTRUCTIONS = [
-  'Blacksmith V1 wallet (Kernel 0.2.4 / EntryPoint v0.6 on Ethereum and Base).',
-  'These tools read chain state over public RPC and draft UserOps dry-run only: they never hold keys, never sign, never broadcast.',
-  'The human connects the owner EOA and signs in the browser wallet (wallet_url). Resolve the account before balances, tokens, activity, or a send draft.',
+  'Blacksmith wallet (Kernel 0.2.4 / EntryPoint v0.6 on Ethereum and Base).',
+  'Reads and drafts over JSON-RPC. Signing uses a local encrypted keystore and Kernel v2 session keys; private keys never appear in tool results.',
+  'submit_userop is dry-run unless live:true and policy.json allows it. Direct EntryPoint.handleOps — no bundler. Prefer session keys for agent sends; pages.dev is the human wallet.',
 ].join(' ');
 
 function send(msg) {

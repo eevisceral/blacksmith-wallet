@@ -11,16 +11,28 @@ import {
   epOutValue,
   requiredPrefund,
 } from '../../onchain-ui/kernel.mjs';
-import { TOOLS, callTool, normChain, normAssets, planCalls, decodeCallData, normOp, WALLET_URL } from '../tools.mjs';
+import { TOOLS, callTool, normChain, normAssets, normCalls, planCalls, decodeCallData, normOp, WALLET_URL } from '../tools.mjs';
 
 const DEST = '0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045';
 const USDC = '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48';
 const AA = '0x2222222222222222222222222222222222222222';
 
-test('exactly the 7 locked tools, in order', () => {
+test('exactly 11 tools, original seven first', () => {
   assert.deepEqual(
     TOOLS.map((t) => t.name),
-    ['resolve_account', 'get_balances', 'list_tokens', 'get_activity', 'prepare_send', 'explain_userop', 'wallet_url'],
+    [
+      'resolve_account',
+      'get_balances',
+      'list_tokens',
+      'get_activity',
+      'prepare_userop',
+      'explain_userop',
+      'wallet_url',
+      'keystore',
+      'session',
+      'sign_userop',
+      'submit_userop',
+    ],
   );
   for (const t of TOOLS) {
     assert.ok(t.description && t.inputSchema, t.name);
@@ -44,6 +56,19 @@ test('normAssets kinds, synonyms, validation', () => {
   assert.throws(() => normAssets([{ kind: 'nft', amount: '1' }]), /eth, token, or deposit/);
   assert.throws(() => normAssets([{ kind: 'eth' }]), /amount is required/);
   assert.throws(() => normAssets([{ kind: 'token', amount: '1' }]), /token address/);
+});
+
+test('normCalls takes arbitrary to/value/data, decimal ETH or hex wei', () => {
+  assert.deepEqual(normCalls([{ to: DEST }]), [{ to: DEST, value: 0n, data: '0x' }]);
+  assert.deepEqual(normCalls([{ to: DEST, value: '0.5', data: '0x1234' }]), [
+    { to: DEST, value: 5n * 10n ** 17n, data: '0x1234' },
+  ]);
+  assert.equal(normCalls([{ to: DEST, value: '0xde0b6b3a7640000' }])[0].value, 10n ** 18n);
+  assert.throws(() => normCalls([]), /at least one/);
+  assert.throws(() => normCalls([{ to: '0x123' }]), /calls\[0\]\.to/);
+  assert.throws(() => normCalls([{ to: DEST, data: 'zz' }]), /calls\[0\]\.data/);
+  assert.throws(() => normCalls([{ to: DEST, value: '0xzz' }]), /calls\[0\]\.value/);
+  assert.throws(() => normCalls([{ to: DEST, value: '1.0000000000000000001' }]), /Too many decimal/);
 });
 
 test('planCalls caps and calls', () => {
@@ -196,14 +221,14 @@ test('explain_userop warns on non-sudo signature mode and set initCode', async (
     },
   });
   assert.match(text, /initCode SET — this wallet sends empty initCode/);
-  assert.match(text, /mode 0x00000001 — not the ECDSA sudo mode/);
+  assert.match(text, /mode 0x00000001 — plugin \(session-key validator\)/);
 });
 
 test('wallet_url points at the hosted wallet and local freeze', async () => {
   const text = await callTool('wallet_url', {});
   assert.match(text, new RegExp(WALLET_URL.replace(/[/.]/g, '\\$&')));
   assert.match(text, /dist[\\/]index\.html/);
-  assert.match(text, /never signs and never broadcasts/);
+  assert.match(text, /pages\.dev remains the human path/);
 });
 
 test('kernel impl constant still matches the wallet encoding source', () => {

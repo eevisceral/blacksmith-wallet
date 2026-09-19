@@ -120,7 +120,7 @@
     }
     body.on .boot,
     body:not(.on)[data-tab="skill"] .boot { display: none; }
-    body:not(.on) :is(.net, .tabs, .panel-wallet, .act, .dock, #rpcAdd, #rpcBox) { display: none; }
+    body:not(.on) :is(.net, .tabs, .panel-wallet, .act, .dock, #rpcAdd, #rpcBox, #alchAdd, #alchBox) { display: none; }
     .boot h1 {
       font-family: var(--mono);
       font-size: clamp(2.15rem, 6vw, 3.15rem);
@@ -488,7 +488,8 @@
       align-items: center;
       gap: var(--s2);
     }
-    .net-row #rpcAdd { margin-inline-start: auto; }
+    .net-row .net-extra { margin-inline-start: auto; display: flex; flex-wrap: wrap; gap: var(--s2); }
+    .tok-tools { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); }
     .tabs {
       display: flex;
       align-items: stretch;
@@ -661,7 +662,7 @@
     .list > .err, #tokEmpty { flex-shrink: 0; }
     #tokMore { flex-shrink: 0; align-self: flex-start; }
     .badge[aria-pressed="true"] { box-shadow: var(--sunken); }
-    #rpcBox input {
+    #rpcBox input, #alchBox input {
       min-height: var(--s6);
       font-size: var(--fs-sm);
       padding: var(--s1) var(--s2);

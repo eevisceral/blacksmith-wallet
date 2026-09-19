@@ -35,16 +35,16 @@ The committed `onchain-ui/dist/index.html` **is** the freeze. `node onchain-ui/b
 
 One Anvil at a time. Ethereum and Base together only in `test:fork` smoke-ui (`:8546` + `baseRpc`).
 
-Connect an injected wallet (EIP-6963, else `window.ethereum`). After Connect, ERC-20s come from chain `Transfer` logs (`eth_getLogs` — no indexer): the page walks transfers to the account back toward its birth, newest page first, on a soft budget against public RPCs, and `localStorage` remembers both the discovered addresses and how far the walk got. A clipped scan says so — Scan further, paste a contract, or set a Custom RPC for the deep past — instead of claiming the account holds no tokens. If this chain has no Kernel yet, **Create account** is this page’s factory `createAccount(owner, 0)` from the EOA (permissionless, no owner). An existing Kernel 0.2.x at the older factory (same `execute` encoding) is reconnected; 0.2.1 cannot batch — one asset per send. First Ethereum scan can take a while. Optional custom RPC is stored in `localStorage`. If a custom RPC is set, it is the only URL used (no fall-through to a public node). Send needs ETH on the EOA for the outer tx.
+Connect an injected wallet (EIP-6963, else `window.ethereum`). After Connect, ERC-20s come from chain `Transfer` logs (`eth_getLogs` — no indexer) unless an Alchemy API key is set (header): then the exclusive Alchemy JSON-RPC plus Portfolio (USD) and Transfers APIs are used — no SDK. Optional custom RPC is stored in `localStorage` and is the only URL used when set (no fall-through; it also wins over Alchemy so a local fork stays local). If a custom RPC is unset, a public snapshot is walked. Send needs ETH on the EOA for the outer tx.
 
 ## Layout
 
 - `onchain-ui/index.html` + `wallet.css` + `app.mjs` + `kernel.mjs` — source page (`kernel.mjs` is the encoding seam; do not add `@zerodev/sdk`)
 - `onchain-ui/dest.mjs` — dest / 7702 checks
-- `onchain-ui/dist/index.html` — freeze (`SKILL.md` inlined; **5** EIP-170 chunks / **118387** B)
+- `onchain-ui/dist/index.html` — freeze (`SKILL.md` inlined; **6** EIP-170 chunks / **127294** B)
 - `onchain-ui/contracts/` — `AccountFactory` (permissionless Kernel 0.2.4 CREATE2) + `VersionHost` (`html()` / `request()`)
 - `onchain-ui/dev/` — local fork playground (not in the freeze; serves repo-root `SKILL.md` at `/SKILL.md`)
-- `mcp/` — zero-dependency stdio MCP for agents (resolve / balances / tokens / activity / dry-run send draft / UserOp decode; no keys, no broadcast; not in the freeze)
+- `mcp/` — stdio MCP for agents (resolve / balances / tokens / activity / UserOp drafts — sends or arbitrary calls / UserOp decode / keystore + session keys / sign + policy-gated handleOps; not in the freeze)
 - `SKILL.md` — operator manual (in-page tab; inlined into the freeze)
 
 Unbundled `index.html` + `app.mjs` needs a static server (`file://` blocks ES modules). Open `dist/index.html` from disk if you want a single file.
@@ -52,13 +52,13 @@ Unbundled `index.html` + `app.mjs` needs a static server (`file://` blocks ES mo
 ## Freeze
 
 ```
-keccak256(utf8(onchain-ui/dist/index.html)) = 0x4e5ca9176f1a47ebd90aa1f083a8c5d620264f99da2e159bb2d50ba4c042e84b
+keccak256(utf8(onchain-ui/dist/index.html)) = 0x19494a836b906d5948978721d6979dc7dad3a2eff02f9195874710eef3b5a797
 ```
 
 Predicted VersionHost (CREATE2, Nick factory `0x4e59b44847b379578588920cA78FbF26c0B4956C`; same address on Ethereum and Base; **not live** until an operator broadcasts):
 
 ```
-0x51B0456869ec70568B69669b05399B587Ec86FcB
+0x2a551c00ED1015266C30be02617Ec50EF52f27D1
 ```
 
 Predicted AccountFactory (same CREATE2 factory and compiler pin; no owner; **not live** until an operator broadcasts):

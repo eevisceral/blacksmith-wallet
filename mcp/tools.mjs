@@ -1,7 +1,7 @@
 /**
- * Tool handlers for the Blacksmith V1 wallet MCP. Reads and dry-run drafts only:
- * no keys, no signing, no broadcast. Encoding and RPC failover come from the
- * wallet itself (onchain-ui/kernel.mjs, onchain-ui/rpc.mjs) — do not reinvent AA here.
+ * Tool handlers for the Blacksmith wallet MCP: reads, dry-run drafts, optional
+ * local keystore/session signing, and EntryPoint.handleOps under policy.
+ * Encoding and RPC failover come from the wallet (onchain-ui/kernel.mjs, rpc.mjs).
  */
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -29,6 +29,8 @@ import {
   encodeFactoryGetAccount,
   encodeIsAllowedImplementation,
   packSudoSignature,
+  ECDSA_VALIDATOR,
+  SESSION_KEY_VALIDATOR,
   requiredPrefund,
   nativeOutValue,
   epOutValue,
@@ -67,6 +69,12 @@ import {
 } from '../onchain-ui/rpc.mjs';
 import { destError } from '../onchain-ui/dest.mjs';
 import { eq, hex, word, fmtAmt, short } from '../onchain-ui/util.mjs';
+import { alchKey, alchRpc, alchPortfolio, alchTransfers, fmtUsd } from '../onchain-ui/alchemy.mjs';
+import { decodeCallData as decodeCallDataInner } from './tools-decode.mjs';
+import { keystoreStatus, keystoreUnlock, keystoreLock } from './keystore.mjs';
+import { sessionStatus, sessionCreate, sessionUnlock, sessionRevokeLocal, unlockedSession } from './session.mjs';
+import { signUserOp, submitUserOp, opJson as signedOpJson, attachEnableSignature, encodeSessionDisableCall } from './aa-sign.mjs';
+import { loadPolicy } from './policy.mjs';
 
 export const WALLET_URL = 'https://blacksmith-wallet.pages.dev/';
 /** Placeholder signature for drafts; the wallet replaces it with 0x00000000 ‖ 65-byte ECDSA.
@@ -125,23 +133,24 @@ function optInt(v, label) {
 const sessions = new Map();
 let chainQ = Promise.resolve();
 
-async function withChain(chain, rpc, fn) {
-  const custom = typeof rpc === 'string' && rpc.trim() ? rpc.trim() : '';
-  const key = chain + '|' + custom;
+async function withChain(chain, a, fn) {
+  const pasted = typeof (a && a.rpc) === 'string' && a.rpc.trim() ? a.rpc.trim() : '';
+  const via = pasted || alchRpc(alchKey((a && a.alchemy) || process.env.ALCHEMY_API_KEY || ''), chain);
+  const key = chain + '|' + via;
   const run = chainQ.catch(() => {}).then(async () => {
     let s = sessions.get(key);
     if (!s) {
       try {
-        await chooseRpc(chain, custom || undefined, CHAINS[chain].rpcs);
+        await chooseRpc(chain, via || undefined, CHAINS[chain].rpcs);
       } catch (e) {
-        if (custom) {
+        if (via) {
           throw new Error(
             `Custom RPC failed (${e.message || e}). It is the only URL tried — paste another or unset it; there is no public fall-through.`,
           );
         }
         throw e;
       }
-      s = { url: getRpcUrl(), alts: getRpcAlts(), deep: rpcHasDeepLogs(), custom: !!custom };
+      s = { url: getRpcUrl(), alts: getRpcAlts(), deep: rpcHasDeepLogs(), custom: !!via };
       sessions.set(key, s);
     } else {
       setRpcUrl(s.url, s.alts);
@@ -211,7 +220,9 @@ async function resolveOnChain(eoa) {
     execOk = kernelExecImpl(impl);
     batch = kernelBatchImpl(impl);
   }
-  return { picked, impl, execOk, batch, factoryOnChain, legacyAddr, ourAddr };
+  const eth = picked.source === 'legacy' ? legacyEth : ourEth;
+  const deposit = picked.source === 'legacy' ? legacyDeposit : ourDeposit;
+  return { picked, impl, execOk, batch, factoryOnChain, legacyAddr, ourAddr, eth, deposit };
 }
 
 /** account (Kernel address) or eoa (owner, resolved first). */
@@ -271,7 +282,7 @@ async function createText(r, eoa, chain) {
 async function resolveAccount(a) {
   const eoa = needAddress(a.eoa, 'owner EOA');
   const chain = normChain(a.chain);
-  return withChain(chain, a.rpc, async () => {
+  return withChain(chain, a, async () => {
     const r = await resolveOnChain(eoa);
     const name = CHAINS[chain].name;
     if (!r.picked.aa) {
@@ -287,8 +298,15 @@ async function resolveAccount(a) {
         ? 'NOT a 0.2.x implementation this wallet sends with — do not send'
         : r.batch
           ? 'Kernel 0.2.x — execute + executeBatch'
-          : 'Kernel 0.2.1 — execute only, one asset per send';
+          : 'Kernel 0.2.1 — execute only, one call per UserOp';
       lines.push(`- implementation ${r.impl || 'unknown'} — ${implNote}`);
+      const nonceHex = await call(ENTRY_POINT, encodeGetNonce(r.picked.aa));
+      lines.push(
+        `- deployed: yes · nonce ${word(nonceHex)} (EntryPoint key 0) · ETH ${fmtAmt(r.eth, 18, 'ETH', Infinity)} · EntryPoint deposit ${fmtAmt(r.deposit, 18, 'ETH', Infinity)}`,
+      );
+      lines.push(
+        `- validators: ECDSA sudo ${ECDSA_VALIDATOR} (owner EOA signs) · session keys ${SESSION_KEY_VALIDATOR} (enabled per key; MCP session tool)`,
+      );
     } else {
       lines.push(await createText(r, eoa, chain));
     }
@@ -302,14 +320,17 @@ async function resolveAccount(a) {
         `- stranded: the legacy address ${r.legacyAddr} holds ETH or a deposit with no code — create it there (the wallet offers this) to use those funds`,
       );
     }
-    lines.push('', `Reads are free. Creation and sends are signed by the owner EOA in the browser wallet: ${WALLET_URL}`);
+    lines.push(
+      '',
+      `Reads are free. Creation is a plain owner-EOA factory transaction. Sends sign here (owner keystore / session keys, policy-gated) via sign_userop + submit_userop, or in the browser wallet: ${WALLET_URL}`,
+    );
     return lines.join('\n');
   });
 }
 
 async function getBalances(a) {
   const chain = normChain(a.chain);
-  return withChain(chain, a.rpc, async () => {
+  return withChain(chain, a, async () => {
     const { aa, note } = await accountArg(a);
     const [ethHex, depHex] = await Promise.all([
       jrpc(getRpcUrl(), 'eth_getBalance', [aa, 'latest']),
@@ -350,9 +371,38 @@ async function getBalances(a) {
 
 async function listTokens(a) {
   const chain = normChain(a.chain);
-  return withChain(chain, a.rpc, async (s) => {
+  return withChain(chain, a, async (s) => {
     const { aa, note } = await accountArg(a);
     const pasted = (Array.isArray(a.tokens) ? a.tokens : []).map((t) => needAddress(t, 'token').toLowerCase());
+    if (/alchemy\.com/.test(getRpcUrl()) && alchKey(getRpcUrl())) {
+      try {
+        const { rows, native } = await alchPortfolio(alchKey(getRpcUrl()), chain, aa);
+        const extra = [];
+        for (const t of pasted) {
+          if (rows.some((r) => r.address === t)) continue;
+          try {
+            extra.push({ address: t, bal: word(await call(t, encodeBalanceOf(aa))), m: await tokenMeta(t) });
+          } catch {
+            extra.push({ address: t, err: true });
+          }
+        }
+        const lines = [`Tokens held by ${aa} on ${CHAINS[chain].name}${note} (Alchemy Portfolio)`];
+        if (native.usd) lines.push(`- ETH mark ${fmtUsd(native.usd)}`);
+        const show = a.dust === false ? rows : rows.filter((t) => t.usd == null || t.usd >= 1);
+        if (!show.length && !extra.length) lines.push('No tokens on this account yet.');
+        for (const r of show) {
+          const val = r.usd != null ? ` · ${fmtUsd(r.usd)}` : ' · unpriced';
+          lines.push(`- ${fmtAmt(r.bal, r.decimals, r.symbol, Infinity)}${val} — ${r.address}`);
+        }
+        for (const r of extra) {
+          if (r.err) lines.push(`- ${r.address}: unreadable`);
+          else lines.push(`- ${fmtAmt(r.bal, r.m.decimals, r.m.symbol, Infinity)} — ${r.address}`);
+        }
+        return lines.join('\n');
+      } catch {
+        /* JSON-RPC walk below */
+      }
+    }
     const probe = [...new Set([...CHAINS[chain].majors.map((x) => x.toLowerCase()), ...pasted])];
     const found = new Map();
     await Promise.all(
@@ -484,10 +534,33 @@ function rowTitle(legs, ok) {
 
 async function getActivity(a) {
   const chain = normChain(a.chain);
-  return withChain(chain, a.rpc, async () => {
+  return withChain(chain, a, async () => {
     const { aa, note } = await accountArg(a);
     const latest = Number(await jrpc(getRpcUrl(), 'eth_blockNumber', []));
     const limit = Math.min(Math.max(1, optInt(a.limit, 'limit') || 64), 256);
+    if (/alchemy\.com/.test(getRpcUrl()) && alchKey(getRpcUrl()) && a.fromBlock == null && a.toBlock == null) {
+      try {
+        const legs = await alchTransfers(getRpcUrl(), aa);
+        const by = new Map();
+        for (const g of legs) {
+          const k = String(g.hash).toLowerCase();
+          const r = by.get(k) || { hash: g.hash, block: g.block, ok: true, legs: [] };
+          r.block = Math.max(r.block, g.block);
+          r.legs.push({ d: g.d, k: g.k, amt: g.amt, p: g.p, sym: g.sym, dec: g.dec });
+          by.set(k, r);
+        }
+        const rows = [...by.values()].sort((x, y) => y.block - x.block).slice(0, limit);
+        const lines = [`Activity for ${aa} on ${CHAINS[chain].name}${note} — Alchemy Transfers, newest first, ${rows.length} row${rows.length === 1 ? '' : 's'}`];
+        for (const r of rows) {
+          const amts = r.legs.map((x) => `${x.d === 1 ? '+' : '−'}${fmtAmt(BigInt(x.amt), x.dec, x.sym || (x.k === 'eth' ? 'ETH' : short(x.k)))}`).join(' · ');
+          lines.push(`- block ${r.block} · ${rowTitle(r.legs, r.ok)}${amts ? ` (${amts})` : ''} · ${r.hash}`);
+        }
+        if (!rows.length) lines.push('No transfers.');
+        return lines.join('\n');
+      } catch {
+        /* logs below */
+      }
+    }
     let pack;
     const notes = [];
     try {
@@ -563,6 +636,31 @@ export function normAssets(raw) {
     const out = { kind, amount };
     if (kind === 'token') out.token = needAddress(x && x.token, `assets[${i}].token`);
     return out;
+  });
+}
+
+/** Arbitrary Kernel calls: [{ to, value, data }] — value is decimal ETH or 0x hex wei, data 0x-hex. */
+export function normCalls(raw) {
+  if (!Array.isArray(raw) || !raw.length) throw new Error('calls must list at least one { to, value, data }.');
+  return raw.map((c, i) => {
+    const to = needAddress(c && c.to, `calls[${i}].to`);
+    const data = needHex((c && c.data) || '0x', `calls[${i}].data`);
+    let value = 0n;
+    const v = c && c.value;
+    if (v != null && String(v).trim() !== '') {
+      const s = String(v).trim();
+      if (/^0x/i.test(s)) {
+        try {
+          value = BigInt(s);
+        } catch {
+          throw new Error(`calls[${i}].value must be decimal ETH or 0x hex wei.`);
+        }
+      } else {
+        value = parseAmt(s, 18);
+      }
+      if (value < 0n) throw new Error(`calls[${i}].value must be zero or more.`);
+    }
+    return { to, value, data };
   });
 }
 
@@ -654,11 +752,17 @@ function opJson(op) {
   );
 }
 
-async function prepareSend(a) {
+async function prepareUserOp(a) {
   const eoa = needAddress(a.eoa, 'owner EOA');
   const chain = normChain(a.chain);
-  const assets = normAssets(a.assets);
-  return withChain(chain, a.rpc, async () => {
+  const hasAssets = Array.isArray(a.assets) && a.assets.length > 0;
+  const hasCalls = Array.isArray(a.calls) && a.calls.length > 0;
+  if (!hasAssets && !hasCalls) {
+    throw new Error('Pass assets (eth/token/deposit send helpers) or calls (arbitrary { to, value, data }) — both land in one UserOp.');
+  }
+  const assets = hasAssets ? normAssets(a.assets) : [];
+  const rawCalls = hasCalls ? normCalls(a.calls) : [];
+  return withChain(chain, a, async () => {
     const r = await resolveOnChain(eoa);
     const name = CHAINS[chain].name;
     if (!r.picked.aa) {
@@ -668,9 +772,12 @@ async function prepareSend(a) {
     if (!r.execOk) {
       return `The account at ${r.picked.aa} is not a Kernel 0.2.x implementation this wallet sends with (${r.impl || 'unknown'}). Don’t send.`;
     }
-    if (assets.length > 1 && !r.batch) return 'This Kernel is 0.2.1 — one asset per send. Re-run with a single asset.';
+    const nLegs = assets.length + rawCalls.length;
+    if (nLegs > 1 && !r.batch) {
+      return 'This Kernel is 0.2.1 — no executeBatch, one call per UserOp. Re-run with a single asset or call.';
+    }
     const aa = r.picked.aa;
-    const to = a.to ? needAddress(a.to, 'destination') : eoa;
+    const to = hasAssets ? (a.to ? needAddress(a.to, 'destination') : eoa) : null;
     const needEth = assets.some((x) => x.kind === 'eth');
     const [nonceHex, block, ethHex, depHex, destCode] = await Promise.all([
       call(ENTRY_POINT, encodeGetNonce(aa)),
@@ -679,10 +786,12 @@ async function prepareSend(a) {
       call(ENTRY_POINT, encodeBalanceOf(aa)),
       needEth ? jrpc(getRpcUrl(), 'eth_getCode', [to, 'latest']) : '0x',
     ]);
-    const dErr = destError({ dest: to, aa, needEth, destCode });
-    if (dErr) throw new Error(dErr);
+    if (hasAssets) {
+      const dErr = destError({ dest: to, aa, needEth, destCode });
+      if (dErr) throw new Error(dErr);
+    }
     const fees = feesFromBlock(block);
-    const gas = opGas(assets.length);
+    const gas = opGas(nLegs);
     const prefund = requiredPrefund(gas.callGasLimit, gas.verificationGasLimit, gas.preVerificationGas, fees.maxFeePerGas);
     const eth = word(ethHex);
     const dep = word(depHex);
@@ -697,14 +806,14 @@ async function prepareSend(a) {
           tokens.set(key, { ...m, bal: word(balHex) });
         }),
     );
-    const plan = planCalls(assets, { to, eth, dep, prefund, tokens });
-    if (plan.err) return `Cannot prepare this send: ${plan.err}`;
-    const miss = missingPrefund(eth, dep, plan.ethOut, plan.epOut, prefund);
-    if (miss) return `Cannot prepare this send: ${PREFUND_COPY[miss]}`;
+    const plan = assets.length ? planCalls(assets, { to, eth, dep, prefund, tokens }) : { calls: [], lines: [], ethOut: 0n, epOut: 0n };
+    if (plan.err) return `Cannot prepare this UserOp: ${plan.err}`;
+    const calls = [...plan.calls, ...rawCalls];
+    const ethOut = plan.ethOut + rawCalls.reduce((s, c) => s + c.value, 0n);
+    const miss = missingPrefund(eth, dep, ethOut, plan.epOut, prefund);
+    if (miss) return `Cannot prepare this UserOp: ${PREFUND_COPY[miss]}`;
     const callData =
-      plan.calls.length === 1
-        ? encodeExecute(plan.calls[0].to, plan.calls[0].value, plan.calls[0].data)
-        : encodeExecuteBatch(plan.calls);
+      calls.length === 1 ? encodeExecute(calls[0].to, calls[0].value, calls[0].data) : encodeExecuteBatch(calls);
     const op = {
       sender: aa,
       nonce: word(nonceHex),
@@ -718,28 +827,39 @@ async function prepareSend(a) {
     const userOpHash = '0x' + (await call(ENTRY_POINT, encodeGetUserOpHash(op))).slice(-64);
     const sim = a.simulate === false ? '' : await simulateText(op, eoa);
     const lines = [
-      `Dry-run send draft — ${aa} on ${name} (Kernel ${r.batch ? '0.2.4' : '0.2.1'}). Nothing is signed or broadcast.`,
+      `Dry-run UserOp draft — ${aa} on ${name} (Kernel ${r.batch ? '0.2.4' : '0.2.1'}). Unsigned until sign_userop.`,
       '',
-      `To: ${to}`,
-      ...plan.lines,
+    ];
+    if (hasAssets) lines.push(`To: ${to}`, ...plan.lines);
+    if (rawCalls.length) {
+      const meta = new Map();
+      await Promise.all(
+        rawCalls
+          .filter((c) => decodeInner(c.data).kind === 'transfer')
+          .map(async (c) => {
+            const k = c.to.toLowerCase();
+            if (!meta.has(k)) meta.set(k, await tokenMeta(c.to).catch(() => null));
+          }),
+      );
+      lines.push(...rawCalls.map((c) => `- ${callLine(c, meta)}`));
+    }
+    lines.push(
       '',
-      `callData (Kernel ${plan.calls.length === 1 ? 'execute' : 'executeBatch'}):`,
+      `callData (Kernel ${calls.length === 1 ? 'execute' : 'executeBatch'}):`,
       callData,
       '',
       'UserOperation v0.6 draft:',
       opJson(op),
       '',
-      `userOpHash: ${userOpHash} — the owner EOA signs this (personal_sign); signature = 0x00000000 ‖ 65-byte ECDSA, replacing the placeholder above. The hash does not cover the signature field.`,
+      `userOpHash: ${userOpHash} — sign_userop packs the signature (session plugin or 0x00000000 ‖ 65-byte owner ECDSA), replacing the placeholder above. The hash does not cover the signature field.`,
       '',
       `Prefund ${prefund} wei (${fmtAmt(prefund, 18, 'ETH')}) = (callGas ${gas.callGasLimit} + verification ${gas.verificationGasLimit} + preVerification ${gas.preVerificationGas}) × maxFee ${fmtAmt(fees.maxFeePerGas, 9, 'gwei')}. EntryPoint takes it from the deposit first, then Kernel ETH. The EOA pays the outer handleOps tx gas itself.`,
-    ];
+    );
     if (sim) lines.push('', `Simulation: ${sim}`);
     lines.push(
       '',
-      `Submit: open ${WALLET_URL}, connect ${eoa}, and send there — the page builds and signs this same op. Manual path: sign the hash, then the EOA sends handleOps to ${ENTRY_POINT}:`,
+      `Next: sign_userop on this UserOp, then submit_userop (dry_run default). Live handleOps needs live: true plus policy. Human path: ${WALLET_URL}. handleOps to ${ENTRY_POINT}:`,
       encodeHandleOps(op, eoa),
-      '',
-      'This MCP never broadcasts.',
     );
     return lines.join('\n');
   });
@@ -760,42 +880,8 @@ function decodeInner(data) {
 
 /** Decode Kernel execute / executeBatch callData into { to, value, data } calls. */
 export function decodeCallData(callData) {
-  const h = stripHex(needHex(callData, 'callData'));
-  if (h.length < 8) throw new Error('callData is too short.');
-  const sel = h.slice(0, 8);
-  const body = h.slice(8);
-  const w = (i) => body.slice(i * 64, i * 64 + 64);
-  if (sel === EXECUTE_SEL) {
-    if (body.length < 256) throw new Error('truncated execute callData.');
-    const bOff = Number(BigInt('0x' + w(2))) * 2;
-    if (body.length < bOff + 64) throw new Error('truncated execute callData.');
-    const len = Number(BigInt('0x' + body.slice(bOff, bOff + 64)));
-    return {
-      kind: 'execute',
-      operation: Number(BigInt('0x' + w(3))),
-      calls: [{ to: '0x' + w(0).slice(24), value: BigInt('0x' + w(1)), data: '0x' + body.slice(bOff + 64, bOff + 64 + len * 2) }],
-    };
-  }
-  if (sel === EXECUTE_BATCH_SEL) {
-    const arrOff = Number(BigInt('0x' + w(0))) * 2;
-    const count = Number(BigInt('0x' + body.slice(arrOff, arrOff + 64)));
-    const base = arrOff + 64;
-    const calls = [];
-    for (let i = 0; i < count; i++) {
-      const rel = Number(BigInt('0x' + body.slice(base + i * 64, base + i * 64 + 64))) * 2;
-      const cs = base + rel;
-      if (body.length < cs + 192) throw new Error('truncated executeBatch callData.');
-      const dOff = Number(BigInt('0x' + body.slice(cs + 128, cs + 192))) * 2;
-      const len = Number(BigInt('0x' + body.slice(cs + dOff, cs + dOff + 64)));
-      calls.push({
-        to: '0x' + body.slice(cs + 24, cs + 64),
-        value: BigInt('0x' + body.slice(cs + 64, cs + 128)),
-        data: '0x' + body.slice(cs + dOff + 64, cs + dOff + 64 + len * 2),
-      });
-    }
-    return { kind: 'executeBatch', calls };
-  }
-  return { kind: 'other', selector: '0x' + sel, calls: [] };
+  needHex(callData, 'callData');
+  return decodeCallDataInner(callData);
 }
 
 function numField(v, label) {
@@ -866,7 +952,7 @@ async function explainUserOp(a) {
       `- gas: call ${op.callGasLimit} · verification ${op.verificationGasLimit} · preVerification ${op.preVerificationGas}`,
       `- fees: maxFee ${fmtAmt(op.maxFeePerGas, 9, 'gwei', Infinity)} · maxPriority ${fmtAmt(op.maxPriorityFeePerGas, 9, 'gwei', Infinity)}`,
       `- prefund ${pre} wei (${fmtAmt(pre, 18, 'ETH')}) — EntryPoint takes it from the deposit first, then Kernel ETH`,
-      `- signature ${!sig ? 'empty (unsigned draft)' : mode === SIG_SUDO ? 'mode 0x00000000 — ECDSA sudo: the owner EOA signs the userOpHash' : `mode 0x${mode} — not the ECDSA sudo mode this wallet uses`}`,
+      `- signature ${!sig ? 'empty (unsigned draft)' : mode === SIG_SUDO ? 'mode 0x00000000 — ECDSA sudo: the owner EOA signs the userOpHash' : mode === '00000001' ? 'mode 0x00000001 — plugin (session-key validator)' : mode === '00000002' ? 'mode 0x00000002 — enable validator + UserOp' : `mode 0x${mode} — not ECDSA sudo / session plugin / enable`}`,
       '',
     );
   }
@@ -881,7 +967,7 @@ async function explainUserOp(a) {
     let meta = null;
     if (a.chain != null) {
       const chain = normChain(a.chain);
-      meta = await withChain(chain, a.rpc, async () => {
+      meta = await withChain(chain, a, async () => {
         const m = new Map();
         await Promise.all(
           decoded.calls
@@ -915,9 +1001,137 @@ async function walletUrl() {
   if (existsSync(dist)) lines.push(`Local freeze: ${dist} (same page, opens from disk)`);
   lines.push(
     '',
-    'The human opens it with a browser wallet, connects the owner EOA, creates the Kernel once per chain if missing, and signs/sends there. This MCP reads and drafts only — it never signs and never broadcasts.',
+    'The human opens it with a browser wallet, connects the owner EOA, and creates the Kernel once per chain if missing. Agents may sign and submit handleOps via this MCP when a keystore/session is unlocked under policy. pages.dev remains the human path.',
   );
   return lines.join('\n');
+}
+
+function rejectSecrets(a) {
+  if (a && (a.passphrase || a.password || a.private_key || a.mnemonic || a.seed)) {
+    throw new Error('Do not pass secrets as tool arguments. Use BLACKSMITH_KEYSTORE_PASS or keystore-cli.');
+  }
+}
+
+async function keystoreTool(a) {
+  rejectSecrets(a);
+  const action = String((a && a.action) || 'status').toLowerCase();
+  if (action === 'status') {
+    const s = keystoreStatus();
+    const p = loadPolicy();
+    return [
+      `Owner keystore ${s.onDisk ? 'on disk' : 'missing'} at ${s.path}`,
+      s.address ? `- address ${s.address}` : '- none yet — node mcp/keystore-cli.mjs import',
+      s.unlocked ? `- unlocked until ${new Date(s.until).toISOString()}` : '- locked',
+      `- policy ${p.missing ? 'not found (live still requires dry-run first by default)' : p.path}`,
+    ].join('\n');
+  }
+  if (action === 'unlock') {
+    const addr = keystoreUnlock();
+    try {
+      sessionUnlock();
+    } catch {
+      /* no session file */
+    }
+    return `Unlocked owner ${addr} in memory with TTL. Passphrase and key material are not returned.`;
+  }
+  if (action === 'lock') {
+    keystoreLock();
+    return 'Owner keystore locked; memory wiped.';
+  }
+  throw new Error('keystore action must be status, unlock, or lock.');
+}
+
+async function sessionTool(a) {
+  rejectSecrets(a);
+  const action = String((a && a.action) || 'status').toLowerCase();
+  if (action === 'status') {
+    const s = sessionStatus();
+    return `Session keys at ${s.path}: ${s.count} stored, ${s.unlocked ? 'one unlocked' : 'locked'}. Addresses only — no private keys.\n${JSON.stringify(s.active, null, 2)}`;
+  }
+  if (action === 'create') {
+    const rec = sessionCreate({
+      targets: a.targets,
+      selectors: a.selectors,
+      valueLimit: a.value_limit,
+      validUntil: a.valid_until,
+      unrestricted: a.unrestricted,
+    });
+    return [
+      `Created session key ${rec.address} (encrypted on disk). Private key is not returned.`,
+      rec.unrestricted
+        ? 'Enable uses merkleRoot 0 (session ECDSA). MCP policy.json still gates live submit.'
+        : 'MCP-side target/selector/value limits apply when signing.',
+      'Enable on-chain with session action enable (owner unlocked) — Kernel mode 0x00000002, then day-to-day plugin mode 0x00000001.',
+    ].join('\n');
+  }
+  if (action === 'unlock') {
+    return `Session ${sessionUnlock(a.session)} unlocked in memory. Private key is not returned.`;
+  }
+  if (action === 'enable') {
+    const chain = normChain(a.chain);
+    return withChain(chain, a, async () => {
+      const eoa = needAddress(a.eoa, 'owner EOA');
+      const r = await resolveOnChain(eoa);
+      if (!r.picked.deployed) throw new Error('Kernel must be live before enabling a session key.');
+      sessionUnlock(a.session);
+      const session = unlockedSession();
+      const nonceRaw = String(
+        await call(SESSION_KEY_VALIDATOR, '0x7ecebe00' + String(r.picked.aa).replace(/^0x/i, '').toLowerCase().padStart(64, '0')),
+      ).replace(/^0x/i, '');
+      const lastNonce = BigInt('0x' + nonceRaw.padStart(128, '0').slice(0, 64));
+      const sessNonce = lastNonce + 1n;
+      const fees = feesFromBlock(await jrpc(getRpcUrl(), 'eth_getBlockByNumber', ['latest', false]));
+      const gas = opGas(1);
+      const nonceHex = await call(ENTRY_POINT, encodeGetNonce(r.picked.aa));
+      const op = {
+        sender: r.picked.aa,
+        nonce: word(nonceHex),
+        initCode: '0x',
+        callData: encodeExecute(eoa, 0n, '0x'),
+        ...gas,
+        ...fees,
+        paymasterAndData: '0x',
+        signature: packSudoSignature(DUMMY65),
+      };
+      const signed = await attachEnableSignature(op, chain, r.picked.aa, session, sessNonce);
+      return ['Enable-mode UserOp (one-time owner EIP-712 + session personal_sign). Submit via submit_userop.', signedOpJson(signed.op), `userOpHash ${signed.userOpHash}`].join('\n\n');
+    });
+  }
+  if (action === 'revoke') {
+    const sk = needAddress(a.session, 'session');
+    sessionRevokeLocal(sk);
+    if (a.chain == null) return `Removed local session ${sk}. Pass chain and eoa to draft on-chain disable callData.`;
+    const chain = normChain(a.chain);
+    return withChain(chain, a, async () => {
+      const eoa = needAddress(a.eoa, 'owner EOA');
+      const r = await resolveOnChain(eoa);
+      const callData = encodeExecute(SESSION_KEY_VALIDATOR, 0n, encodeSessionDisableCall(sk));
+      return `Local session removed. On-chain disable is a sudo UserOp from ${r.picked.aa}:\n${callData}`;
+    });
+  }
+  throw new Error('session action must be status, create, unlock, enable, or revoke.');
+}
+
+async function signUserOpTool(a) {
+  rejectSecrets(a);
+  const op = normOp(a.userOp);
+  const chain = normChain(a.chain);
+  return withChain(chain, a, async () => {
+    const signed = await signUserOp(op, { signer: a.signer });
+    const who = signed.session || signed.owner || signed.signer;
+    return [`Signed with ${signed.signer} ${who}. Key material is not returned.`, '', signedOpJson(signed.op), '', `userOpHash: ${signed.userOpHash}`].join('\n');
+  });
+}
+
+async function submitUserOpTool(a) {
+  rejectSecrets(a);
+  const op = normOp(a.userOp);
+  const chain = normChain(a.chain);
+  return withChain(chain, a, async () => {
+    const r = await submitUserOp(op, { live: a.live === true, dry_run: a.dry_run, chain, eoa: a.eoa });
+    if (r.dry_run) return `Dry-run submit — not broadcast.\nuserOpHash ${r.userOpHash}\nSimulation: ${r.simulation}`;
+    return `Live EntryPoint.handleOps submitted.\nuserOpHash ${r.userOpHash}\ntx ${r.txHash}`;
+  });
 }
 
 const CHAIN_SCHEMA = {
@@ -930,7 +1144,12 @@ const CHAIN_SCHEMA = {
 const RPC_SCHEMA = {
   type: 'string',
   description:
-    'Optional custom RPC URL. When set it is the only URL used — no public fall-through (a dead local fork must not land on live L1). When omitted, the wallet’s pinned public Chainlist snapshot is walked in order.',
+    'Optional custom RPC URL. When set it is the only URL used — no public fall-through (a dead local fork must not land on live L1). When omitted, an Alchemy key (argument or ALCHEMY_API_KEY) is exclusive JSON-RPC; else the pinned public snapshot is walked.',
+};
+const ALCH_SCHEMA = {
+  type: 'string',
+  description:
+    'Optional Alchemy API key (or https://…g.alchemy.com/v2/… URL). Exclusive node for this chain plus Portfolio tokens (USD) and Transfers history. Ignored when rpc is set. Defaults to env ALCHEMY_API_KEY.',
 };
 const ACCOUNT_SCHEMA = {
   type: 'string',
@@ -950,7 +1169,7 @@ export const TOOLS = [
       type: 'object',
       additionalProperties: false,
       required: ['eoa', 'chain'],
-      properties: { eoa: { ...EOA_SCHEMA, description: 'Owner EOA (0x…).' }, chain: CHAIN_SCHEMA, rpc: RPC_SCHEMA },
+      properties: { eoa: { ...EOA_SCHEMA, description: 'Owner EOA (0x…).' }, chain: CHAIN_SCHEMA, rpc: RPC_SCHEMA, alchemy: ALCH_SCHEMA },
     },
   },
   {
@@ -966,6 +1185,7 @@ export const TOOLS = [
         eoa: EOA_SCHEMA,
         chain: CHAIN_SCHEMA,
         rpc: RPC_SCHEMA,
+        alchemy: ALCH_SCHEMA,
         tokens: {
           type: 'array',
           items: { type: 'string' },
@@ -977,7 +1197,7 @@ export const TOOLS = [
   {
     name: 'list_tokens',
     description:
-      'Token holdings of the Kernel account: probe the pinned majors with balanceOf at head, add pasted contract addresses, and optionally page inbound Transfer logs back toward account birth on a soft budget. A clipped walk says how far back it got — it never claims empty off a clipped scan. No price API.',
+      'Token holdings of the Kernel account. With an Alchemy key: Portfolio API (balances, metadata, USD). Else: majors balanceOf plus optional Transfer-in walk. A clipped walk never claims empty.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -987,19 +1207,21 @@ export const TOOLS = [
         eoa: EOA_SCHEMA,
         chain: CHAIN_SCHEMA,
         rpc: RPC_SCHEMA,
+        alchemy: ALCH_SCHEMA,
         tokens: { type: 'array', items: { type: 'string' }, description: 'Extra ERC-20 contract addresses to include.' },
         walk: {
           type: 'boolean',
-          description: 'Page ERC-20 Transfer-in logs toward account birth (budgeted on public RPC; deeper on a custom/archive RPC).',
+          description: 'Page ERC-20 Transfer-in logs toward account birth (budgeted on public RPC; deeper on a custom/archive RPC). Ignored when Alchemy Portfolio succeeds.',
         },
         fromBlock: { type: 'integer', description: 'Optional walk floor (e.g. a known birth block).' },
+        dust: { type: 'boolean', description: 'When using Alchemy, hide unpriced or sub-$1 tokens (default true).' },
       },
     },
   },
   {
     name: 'get_activity',
     description:
-      'Recent account activity from public eth_getLogs: EntryPoint UserOperationEvent and Withdrawn, Kernel Received (plain ETH in), and ERC-20 Transfer legs. Newest first, cap 256. Native ETH out and ETH in with calldata leave no log. A pruned node names its floor block — paste an archive RPC for older.',
+      'Recent account activity. With an Alchemy key: alchemy_getAssetTransfers (ETH in/out including calldata, ERC-20). Else public eth_getLogs. Newest first, cap 256.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -1009,6 +1231,7 @@ export const TOOLS = [
         eoa: EOA_SCHEMA,
         chain: CHAIN_SCHEMA,
         rpc: RPC_SCHEMA,
+        alchemy: ALCH_SCHEMA,
         fromBlock: { type: 'integer', description: 'Explicit range start. Default: the recent ~120000-block window.' },
         toBlock: { type: 'integer', description: 'Explicit range end. Default: head.' },
         limit: { type: 'integer', description: 'Max rows, newest first (default 64, cap 256).' },
@@ -1016,18 +1239,19 @@ export const TOOLS = [
     },
   },
   {
-    name: 'prepare_send',
+    name: 'prepare_userop',
     description:
-      'Build a dry-run send from the Kernel account: Kernel execute/executeBatch callData, a UserOperation v0.6 draft (empty initCode/paymasterAndData), the userOpHash the owner EOA signs, prefund math, and an optional eth_call handleOps simulation. Never broadcasts, never touches keys — the human signs and submits in the browser wallet.',
+      'Build an unsigned UserOp v0.6 from the Kernel: asset send helpers (eth / token / deposit) and/or arbitrary calls [{ to, value, data }] — one leg is Kernel execute, several are executeBatch. Prefund, userOpHash, optional eth_call. Next: sign_userop → submit_userop.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
-      required: ['eoa', 'chain', 'assets'],
+      required: ['eoa', 'chain'],
       properties: {
         eoa: { ...EOA_SCHEMA, description: 'Owner EOA (0x…) — resolves the account and is the handleOps sender.' },
         chain: CHAIN_SCHEMA,
         rpc: RPC_SCHEMA,
-        to: { type: 'string', description: 'Destination address. Defaults to the owner EOA.' },
+        alchemy: ALCH_SCHEMA,
+        to: { type: 'string', description: 'Destination for asset sends. Defaults to the owner EOA.' },
         assets: {
           type: 'array',
           minItems: 1,
@@ -1048,6 +1272,22 @@ export const TOOLS = [
               },
             },
           },
+          description: 'Send helpers. Optional if calls is passed; both combine into one UserOp.',
+        },
+        calls: {
+          type: 'array',
+          minItems: 1,
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['to'],
+            properties: {
+              to: { type: 'string', description: 'Call target (0x…).' },
+              value: { type: 'string', description: "Native ETH value: decimal string ('0.01') or 0x hex wei. Default 0." },
+              data: { type: 'string', description: '0x calldata. Default 0x.' },
+            },
+          },
+          description: 'Arbitrary Kernel calls (any contract, any calldata). Optional if assets is passed.',
         },
         simulate: {
           type: 'boolean',
@@ -1069,14 +1309,85 @@ export const TOOLS = [
         callData: { type: 'string', description: 'Raw callData hex when no full UserOp is at hand.' },
         chain: { ...CHAIN_SCHEMA, description: 'Optional — enriches ERC-20 legs with on-chain symbol/decimals.' },
         rpc: RPC_SCHEMA,
+        alchemy: ALCH_SCHEMA,
       },
     },
   },
   {
     name: 'wallet_url',
     description:
-      'The browser wallet URL (hosted freeze, plus the local dist copy when present). The human connects the owner EOA there to create the account, sign, and submit — this MCP reads and drafts only.',
+      'The browser wallet URL (hosted freeze, plus local dist). Humans connect there to create the account. Agents can also sign/submit through this MCP under policy.',
     inputSchema: { type: 'object', additionalProperties: false, properties: {} },
+  },
+  {
+    name: 'keystore',
+    description:
+      'Owner ECDSA keystore: status, unlock (BLACKSMITH_KEYSTORE_PASS / PASS_FILE, never a chat arg), lock. Memory TTL. Import keys with node mcp/keystore-cli.mjs — not this tool.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        action: { type: 'string', enum: ['status', 'unlock', 'lock'], description: 'Default status.' },
+      },
+    },
+  },
+  {
+    name: 'session',
+    description:
+      'Kernel v2 session keys (EntryPoint v0.6 session-key validator). status / create / unlock / enable (one-time owner sudo enable-mode UserOp) / revoke. Private keys never returned. Preferred signer for agents when permissions cover the call.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        action: { type: 'string', enum: ['status', 'create', 'unlock', 'enable', 'revoke'] },
+        session: { type: 'string', description: 'Session key address for unlock/enable/revoke.' },
+        eoa: EOA_SCHEMA,
+        chain: CHAIN_SCHEMA,
+        rpc: RPC_SCHEMA,
+        alchemy: ALCH_SCHEMA,
+        targets: { type: 'array', items: { type: 'string' }, description: 'MCP-side target allowlist.' },
+        selectors: { type: 'array', items: { type: 'string' } },
+        value_limit: { type: 'string' },
+        valid_until: { type: 'integer' },
+        unrestricted: { type: 'boolean' },
+      },
+    },
+  },
+  {
+    name: 'sign_userop',
+    description:
+      'Sign a UserOp v0.6: session key when unlocked and permissions cover the call, else owner sudo if unlocked. Returns the packed signature (0x00000000 sudo or 0x00000001 plugin). Never prints private keys.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['userOp', 'chain'],
+      properties: {
+        userOp: { description: 'UserOperation object or JSON from prepare_userop.' },
+        chain: CHAIN_SCHEMA,
+        rpc: RPC_SCHEMA,
+        alchemy: ALCH_SCHEMA,
+        signer: { type: 'string', enum: ['auto', 'session', 'owner'] },
+      },
+    },
+  },
+  {
+    name: 'submit_userop',
+    description:
+      'eth_call EntryPoint.handleOps, then optionally broadcast. dry_run is the default; live requires live: true, policy.json, and a prior dry-run of the same userOpHash when require_dry_run_first. Owner keystore pays outer tx gas. No bundler. Aborts if the account nonce changed.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['userOp', 'chain'],
+      properties: {
+        userOp: { description: 'Signed UserOperation.' },
+        chain: CHAIN_SCHEMA,
+        rpc: RPC_SCHEMA,
+        alchemy: ALCH_SCHEMA,
+        eoa: EOA_SCHEMA,
+        live: { type: 'boolean', description: 'Must be true to broadcast. Default false (dry_run).' },
+        dry_run: { type: 'boolean' },
+      },
+    },
   },
 ];
 
@@ -1085,9 +1396,13 @@ const HANDLERS = {
   get_balances: getBalances,
   list_tokens: listTokens,
   get_activity: getActivity,
-  prepare_send: prepareSend,
+  prepare_userop: prepareUserOp,
   explain_userop: explainUserOp,
   wallet_url: walletUrl,
+  keystore: keystoreTool,
+  session: sessionTool,
+  sign_userop: signUserOpTool,
+  submit_userop: submitUserOpTool,
 };
 
 /** Returns Markdown text. Throws for bad input or unreachable chain (server marks isError). */

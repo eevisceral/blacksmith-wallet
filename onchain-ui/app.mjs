@@ -59,7 +59,8 @@ import {
   LOGS_LOOKBACK,
 } from './rpc.mjs';
 import { destError, DEST_7702, is7702 } from './dest.mjs';
-import { HIST_V, initHist, histCur, renderHist, pushHist, discoverHist, backfillHist } from './history.mjs';
+import { HIST_V, initHist, histCur, renderHist, pushHist, discoverHist, discoverAlchHist, backfillHist } from './history.mjs';
+import { LS_ALCH, LS_DUST, alchKey, alchRpc, alchPortfolio, fmtUsd, usdHold, dustTok } from './alchemy.mjs';
 import {
   initSend,
   selectedPicks,
@@ -288,6 +289,8 @@ let deployed = false;
 let implOk = true;
 let maxPicks = Infinity;
 let tokens = [];
+let ethUsd = 0;
+let hideDust = true;
 const tokMeta = new Map();
 let busy = false;
 let scanId = 0;
@@ -480,28 +483,50 @@ function announced() {
   return list;
 }
 
+function rpcPaste(id = chainId) {
+  return ($('rpcIn').value || localStorage.getItem(LS_RPC + id) || '').trim();
+}
+
+function alchPaste() {
+  return alchKey(($('alchIn') && $('alchIn').value) || localStorage.getItem(LS_ALCH) || '');
+}
+
+function alchOn(id = chainId) {
+  if (forkCfg()) return '';
+  return alchPaste() || alchKey(rpcPaste(id));
+}
+
+function rpcPin(id = chainId) {
+  return rpcPaste(id) || alchRpc(alchPaste(), id);
+}
+
 async function pickRpc(id) {
-  const custom = ($('rpcIn').value || localStorage.getItem(LS_RPC + id) || '').trim();
-  // A pasted RPC is the pin for this session. Falling through to public
+  const custom = rpcPaste(id);
+  const via = rpcPin(id);
+  // A pasted RPC (or Alchemy key → exclusive Alchemy URL) is the pin. Falling through to public
   // would send a local-fork user onto live L1 without saying so.
   try {
-    return await chooseRpc(id, custom, CHAINS[id].rpcs);
+    return await chooseRpc(id, via || undefined, CHAINS[id].rpcs);
   } catch (e) {
     throw new Error(
       e.message === 'wrong chain'
         ? custom
           ? 'That RPC is the wrong network. Paste one for this chain.'
-          : 'Public RPC is the wrong network. Paste a custom RPC.'
+          : via
+            ? 'Alchemy is the wrong network for this chain.'
+            : 'Public RPC is the wrong network. Paste a custom RPC.'
         : custom
           ? 'Couldn’t reach that RPC. Check the URL or paste another.'
-          : 'Couldn’t reach this network. Paste a custom RPC.'
+          : via
+            ? 'Couldn’t reach Alchemy. Check the key.'
+            : 'Couldn’t reach this network. Paste a custom RPC or an Alchemy key.'
     );
   }
 }
 
 async function ensureRpc() {
-  const custom = ($('rpcIn').value || '').trim();
-  if (custom && custom !== getRpcUrl()) {
+  const via = rpcPin();
+  if (via && via !== getRpcUrl()) {
     await pickRpc(chainId);
     return;
   }
@@ -912,7 +937,8 @@ async function switchChainOnce(id) {
     return;
   }
   $('rpcIn').value = localStorage.getItem(LS_RPC + id) || '';
-  paintRpc(false);
+  paintPin('rpc', false);
+  paintPin('alch', false);
   try {
     await pickRpc(id);
   } catch (e) {
@@ -967,7 +993,38 @@ function lsCur(prefix, blank, set) {
 }
 
 function tokCur(set) {
-  return lsCur(LS_TOK, () => ({ b: 0, t: -1, f: -1, a: [] }), set);
+  return lsCur(LS_TOK, () => ({ b: 0, t: -1, f: -1, a: [], m: {} }), set);
+}
+
+function rememberTok(cur, t) {
+  const a = t.address.toLowerCase();
+  tokMeta.set(a, { symbol: t.symbol, decimals: t.decimals });
+  if (!cur) return;
+  cur.m = cur.m || {};
+  cur.m[a] = [t.symbol, t.decimals, t.name || '', String(t.bal), t.usd];
+}
+
+function paintTokCache() {
+  if (!aa) {
+    renderHist();
+    return false;
+  }
+  const cur = tokCur();
+  renderHist();
+  const rows = [];
+  for (const a of cur.a || []) {
+    const hit = (cur.m || {})[a];
+    if (!hit) continue;
+    tokMeta.set(a, { symbol: hit[0], decimals: +hit[1] });
+    const wei = BigInt(hit[3] || '0');
+    if (wei > 0n) rows.push({ address: a, symbol: hit[0], decimals: +hit[1], name: hit[2] || '', bal: wei, usd: hit[4] });
+  }
+  if (rows.length) {
+    tokens = rows.sort((x, y) => (x.name || x.symbol).localeCompare(y.name || y.symbol));
+    renderTokens();
+  }
+  if (cur.f >= 0) paintTokEmpty(cur.f <= (cur.b || 0) ? 'done' : 'budget', cur, { latest: cur.t, birth: cur.b });
+  return !!(rows.length || (cur.a || []).length || ((histCur().h || []).length));
 }
 
 async function scanCtx() {
@@ -990,7 +1047,15 @@ async function scanCtx() {
   return { latest, birth, fork };
 }
 
-async function readErc20(addr) {
+async function readErc20(addr, cur) {
+  const a = String(addr).toLowerCase();
+  const hit = cur && cur.m && cur.m[a];
+  if (hit) {
+    const bal = await call(addr, encodeBalanceOf(aa)).then(word).catch(() => 0n);
+    const t = { address: addr, name: hit[2] || '', symbol: hit[0], decimals: Number(hit[1]) || 18, bal };
+    rememberTok(cur, t);
+    return t;
+  }
   const [nm, sym, decRaw, bal] = await Promise.all([
     call(addr, '0x06fdde03').then(decodeStr).catch(() => ''),
     call(addr, '0x95d89b41').then(decodeStr).catch(() => ''),
@@ -998,26 +1063,29 @@ async function readErc20(addr) {
     call(addr, encodeBalanceOf(aa)).then(word).catch(() => 0n),
   ]);
   const d = Number(decRaw);
-  return {
+  const t = {
     address: addr,
     name: nm.trim().slice(0, 48),
     symbol: (sym || addr.slice(0, 6)).slice(0, 12),
     decimals: d >= 0 && d <= 36 ? d : 18,
     bal,
   };
+  rememberTok(cur, t);
+  return t;
 }
 
 async function hydrateTokens(addrs, live) {
+  const cur = tokCur();
   const rows = [];
   for (let i = 0; i < addrs.length; i += 8) {
     if (live && !live()) return;
-    for (const t of await Promise.all(addrs.slice(i, i + 8).map(readErc20))) if (t.bal > 0n) {
+    for (const t of await Promise.all(addrs.slice(i, i + 8).map((x) => readErc20(x, cur)))) if (t.bal > 0n) {
       rows.push(t);
-      tokMeta.set(t.address.toLowerCase(), { symbol: t.symbol, decimals: t.decimals });
     }
     tokens = rows.sort((x, y) => (x.name || x.symbol).localeCompare(y.name || y.symbol));
     renderTokens();
   }
+  tokCur({ ...tokCur(), a: cur.a, m: cur.m });
 }
 
 /** High-cap tokens hold their balance in the contract, not in logs — probe them at head.
@@ -1028,11 +1096,11 @@ async function discoverMajors(cur, live) {
   let found = false;
   for (let i = 0; i < list.length; i += 8) {
     if (live && !live()) return found;
-    for (const t of await Promise.all(list.slice(i, i + 8).map(readErc20))) {
+    for (const t of await Promise.all(list.slice(i, i + 8).map((x) => readErc20(x, cur)))) {
       if (t.bal > 0n) {
         found = true;
         cur.a.push(t.address.toLowerCase());
-        tokMeta.set(t.address.toLowerCase(), { symbol: t.symbol, decimals: t.decimals });
+        rememberTok(cur, t);
       }
     }
   }
@@ -1042,9 +1110,9 @@ async function discoverMajors(cur, live) {
 function tokScanHint(e) {
   const msg = (e && e.message) || 'Couldn’t list tokens.';
   if (pruneFloor(msg)) return PRUNE_HINT;
-  const custom = ($('rpcIn').value || localStorage.getItem(LS_RPC + chainId) || '').trim();
+  const custom = rpcPaste();
   // getLogs already rewrites an all-stall scan into a Custom RPC pointer — don't suffix it twice.
-  if (custom || timeoutLogsMsg(msg)) return msg;
+  if (custom || alchOn() || timeoutLogsMsg(msg)) return msg;
   return msg + ' Custom RPC is in the header if a public node stalled.';
 }
 
@@ -1065,11 +1133,37 @@ function collectTokLogs(cur, logs, fresh) {
  * a time; a fast (custom/archive) node keeps passing, a slow public hands back
  * with 'budget'. Nodes that cannot serve the range at all answer 'wall'.
  */
-async function runTokWalk(scan, cur, live, quiet) {
-  const custom = !!($('rpcIn').value || localStorage.getItem(LS_RPC + chainId) || '').trim();
+async function runTokWalk(scan, cur, live, quiet, older) {
+  const custom = !!rpcPaste();
   const cfg = custom ? TOK_WALK_CUSTOM : TOK_WALK_PUBLIC;
   const deep = scan.latest - scan.birth > LOGS_LOOKBACK;
-  const persist = () => tokCur({ b: scan.birth, t: cur.t, f: cur.f, a: cur.a });
+  const persist = () => tokCur({ b: scan.birth, t: cur.t, f: cur.f, a: cur.a, m: cur.m || {} });
+  const haveFloor = cur.f >= 0;
+  if (haveFloor && !older) {
+    const needHead = cur.t + 1 <= scan.latest;
+    if (!needHead) return cur.f <= scan.birth ? 'done' : 'budget';
+    const budget = { pages: cfg.pages, ms: cfg.ms, t0: Date.now(), used: 0 };
+    const fresh = [];
+    try {
+      await walkTransfersIn(cur.t + 1, scan.latest, aa, {
+        budget,
+        live,
+        onPage: (logs, a, b) => {
+          if (!live()) return;
+          collectTokLogs(cur, logs, fresh);
+          cur.t = b;
+          persist();
+        },
+      });
+    } catch (e) {
+      if (e && e.unserved) return 'wall';
+      throw e;
+    }
+    if (!live()) return 'done';
+    if (fresh.length) await hydrateTokens(fresh, live);
+    persist();
+    return cur.f <= scan.birth ? 'done' : 'budget';
+  }
   for (let pass = 0; pass < cfg.passes; pass++) {
     if (!live()) return 'done';
     const needHead = cur.f >= 0 && cur.t + 1 <= scan.latest;
@@ -1148,13 +1242,37 @@ function paintTokMoreBusy(on) {
   more.textContent = on ? 'Scanning…' : 'Scan further';
 }
 
-async function discoverTokens(quiet, live, scanP) {
+async function discoverTokens(quiet, live, ctxP) {
   const empty = $('tokEmpty');
-  empty.hidden = true;
-  paintTokMoreBusy(false);
-  $('tokMore').hidden = true;
+  if (alchOn() && aa) {
+    try {
+      const { rows, native } = await alchPortfolio(alchOn(), chainId, aa);
+      if (!live()) return;
+      ethUsd = native.usd || usdHold(word($('ethBal').dataset.wei), 18, native.px);
+      paintEthUsd();
+      const cur = tokCur();
+      tokens = rows;
+      for (const t of rows) {
+        if (!cur.a.includes(t.address)) cur.a.push(t.address);
+        rememberTok(cur, t);
+      }
+      tokCur({ b: cur.b || 0, t: 1, f: 0, a: cur.a, m: cur.m || {} });
+      renderTokens();
+      paintTokEmpty('done', tokCur(), { latest: 1, birth: 0 });
+      $('tokMore').hidden = true;
+      return;
+    } catch (e) {
+      if (!live()) return;
+      if (!quiet) setStatus((e && e.message) || 'Alchemy tokens failed; scanning logs.', 'err');
+    }
+  }
   const cur = tokCur();
   if (typeof cur.f !== 'number') cur.f = -1;
+  if (cur.f < 0) {
+    empty.hidden = true;
+    paintTokMoreBusy(false);
+    $('tokMore').hidden = true;
+  }
   const seeded = forkCfg();
   if (seeded?.tokens) {
     for (const t of seeded.tokens) {
@@ -1163,14 +1281,13 @@ async function discoverTokens(quiet, live, scanP) {
     }
   }
   const hydrateP = cur.a.length ? hydrateTokens(cur.a, live) : Promise.resolve();
-  if (await discoverMajors(cur, live)) tokCur({ ...tokCur(), a: cur.a });
+  if (await discoverMajors(cur, live)) tokCur({ ...tokCur(), a: cur.a, m: cur.m });
   if (!live()) return;
   let scan;
   try {
-    scan = await scanP;
+    scan = await ctxP;
   } catch (e) {
     if (!live()) return;
-    // Errors are toast-only; the empty state stays neutral instead of doubling the message.
     const hint = tokScanHint(e);
     empty.hidden = tokens.length > 0;
     empty.textContent = tokens.length ? '' : 'Couldn’t check for tokens just now.';
@@ -1182,11 +1299,12 @@ async function discoverTokens(quiet, live, scanP) {
   if (!live()) return;
   let state = 'done';
   if (scan.fork) {
-    tokCur({ b: scan.birth, t: scan.latest, f: scan.birth, a: cur.a });
+    tokCur({ b: scan.birth, t: scan.latest, f: scan.birth, a: cur.a, m: cur.m || {} });
   } else {
-    paintTokMoreBusy(true);
+    const first = cur.f < 0;
+    if (first) paintTokMoreBusy(true);
     try {
-      state = await runTokWalk(scan, cur, live, quiet);
+      state = await runTokWalk(scan, cur, live, quiet, false);
     } catch (e) {
       if (!live()) return;
       const hint = tokScanHint(e);
@@ -1195,13 +1313,37 @@ async function discoverTokens(quiet, live, scanP) {
       if (!quiet) setStatus(hint, 'err');
       return;
     } finally {
-      paintTokMoreBusy(false);
+      if (first) paintTokMoreBusy(false);
     }
   }
   if (!live()) return;
   await hydrateTokens(cur.a, live);
   if (!live()) return;
   paintTokEmpty(state, cur, scan);
+}
+
+async function continueTokWalk() {
+  if (!aa) return;
+  const id = ++scanId;
+  const mine = aa;
+  const live = () => id === scanId && eq(aa, mine);
+  const scan = await scanCtx();
+  const cur = tokCur();
+  paintTokMoreBusy(true);
+  let state = 'budget';
+  try {
+    state = await runTokWalk(scan, cur, live, false, true);
+  } catch (e) {
+    if (live()) setStatus(tokScanHint(e), 'err');
+    return;
+  } finally {
+    paintTokMoreBusy(false);
+  }
+  if (!live()) return;
+  await hydrateTokens(cur.a, live);
+  if (!live()) return;
+  paintTokEmpty(state, cur, scan);
+  if (lastKind === 'wait') setStatus('');
 }
 
 /** Blocks walked per Scan further pass (20 getLogs spans). */
@@ -1216,6 +1358,11 @@ function histBound(hc) {
 function paintHistMore() {
   const btn = $('histMore');
   if (!btn) return;
+  if (alchOn()) {
+    btn.hidden = true;
+    $('histFloor').hidden = true;
+    return;
+  }
   const hc = histCur();
   const f = Number.isFinite(hc.f) ? hc.f : -1;
   const more = !!aa && f > histBound(hc);
@@ -1363,6 +1510,7 @@ async function refreshAccount(opts) {
   altSource = picked.altSource || '';
   deployed = picked.deployed;
   setAddr('aa', aa);
+  const hadCache = paintTokCache();
   loadPendingTx();
   await checkPendingReceipt();
   let ethHex = '0x0';
@@ -1392,6 +1540,7 @@ async function refreshAccount(opts) {
   const dep = word(depHex);
   $('ethBal').textContent = fmtEth(eth);
   $('ethBal').dataset.wei = String(eth);
+  paintEthUsd();
   $('epBal').textContent = fmtEth(dep);
   $('epBal').dataset.wei = String(dep);
   resetFeeMemo();
@@ -1400,36 +1549,40 @@ async function refreshAccount(opts) {
   prefillMaxes().catch(() => {});
   const id = ++scanId;
   const live = () => id === scanId && aa;
-  if (!quiet) {
+  const keyed = alchOn();
+  if (!quiet && !hadCache) {
     setStatus(
-      chainId === 1 && !forkCfg() && tokCur().t < 0
-        ? 'First scan can take a while. Custom RPC is there if a public node stalls…'
-        : 'Reading tokens…'
+      keyed
+        ? 'Reading tokens…'
+        : chainId === 1 && !forkCfg() && tokCur().t < 0
+          ? 'First scan can take a while. Custom RPC is there if a public node stalls…'
+          : 'Reading tokens…'
     );
   }
+  const emptyLogs = { ops: [], ins: [], outs: [], wds: [], rcv: [], clipped: false };
   const ctxP = scanCtx();
-  const scanP = ctxP.then(async (c) => {
-    const tokFrom = tokCur().t >= c.birth ? tokCur().t + 1 : c.birth;
-    const hcur = histCur();
-    const stale = hcur.v !== HIST_V || (hcur.h || []).some((x) => x.hash && x.legs === undefined);
-    const histFrom = !stale && hcur.t >= c.birth ? hcur.t + 1 : c.birth;
-    const from = Math.min(tokFrom, histFrom);
-    if (from > c.latest) return { ...c, logs: { ops: [], ins: [], outs: [], wds: [], rcv: [], clipped: false } };
-    const logs = logsFrom(await scanAccountLogs(from, c.latest, aa), from);
-    return { ...c, logs };
-  });
-  await Promise.all([discoverTokens(quiet, live, scanP), discoverHist(quiet, live, scanP)]);
+  const scanP = keyed
+    ? ctxP.then((c) => ({ ...c, logs: emptyLogs }))
+    : ctxP.then(async (c) => {
+        const hcur = histCur();
+        const stale = hcur.v !== HIST_V || (hcur.h || []).some((x) => x.hash && x.legs === undefined);
+        const histFrom = !stale && hcur.t >= c.birth ? hcur.t + 1 : c.birth;
+        if (histFrom > c.latest) return { ...c, logs: emptyLogs };
+        const logs = logsFrom(await scanAccountLogs(histFrom, c.latest, aa), histFrom);
+        return { ...c, logs };
+      });
+  await Promise.all([discoverTokens(quiet, live, ctxP), keyed ? discoverAlchHist(quiet, live) : discoverHist(quiet, live, scanP)]);
   if (!live()) return;
   const sp = await scanP;
-  if (sp.logs && !sp.fork) {
+  if (sp.logs && !sp.fork && !keyed) {
     const hc = histCur();
     const f = Math.min(Number.isFinite(hc.f) ? hc.f : Infinity, sp.logs.head ?? sp.latest + 1);
     if (f !== hc.f) histCur({ ...hc, f });
   }
   paintHistMore();
-  autoBackfill().catch(() => {});
+  if (!hadCache && !keyed) autoBackfill().catch(() => {});
   await prefillMaxes().catch(() => {});
-  const clipped = !!sp.logs?.clipped;
+  const clipped = !keyed && !!sp.logs?.clipped;
   if (quiet) return;
   if (eoaWei === 0n) {
     setStatus(EMPTY_WALLET, 'err');
@@ -1451,19 +1604,20 @@ async function addToken() {
     return;
   }
   setHint('tokenErr', '');
-  const t = await readErc20(addr.toLowerCase());
+  const cur = tokCur();
+  const t = await readErc20(addr.toLowerCase(), cur);
   tokens = tokens.filter((x) => !eq(x.address, t.address));
   if (t.bal > 0n) tokens.push(t);
-  tokMeta.set(t.address.toLowerCase(), { symbol: t.symbol, decimals: t.decimals });
-  const cur = tokCur();
-  if (!cur.a.some((x) => eq(x, t.address))) {
-    cur.a.push(t.address);
-    tokCur({ ...cur, a: cur.a });
-  }
+  rememberTok(cur, t);
+  if (!cur.a.some((x) => eq(x, t.address))) cur.a.push(t.address);
+  tokCur({ ...cur, a: cur.a, m: cur.m });
   $('tokenIn').value = '';
   renderTokens();
   if (t.bal === 0n) setHint('tokenErr', 'This account holds none of that token.');
-  else paintTokAdd(false);
+  else {
+    t.keep = true;
+    paintTokAdd(false);
+  }
 }
 
 function spendableRows() {
@@ -1479,12 +1633,41 @@ function spendableRows() {
   });
 }
 
-function paintRpc(on) {
-  const v = ($('rpcIn').value || '').trim();
-  $('rpcBox').hidden = !on;
-  $('rpcAdd').setAttribute('aria-pressed', String(!!(on || v)));
-  $('rpcAdd').setAttribute('aria-expanded', String(!!on));
-  if (on) $('rpcIn').focus();
+function paintEthUsd() {
+  const el = $('ethBal');
+  if (!el || el.dataset.wei == null) return;
+  const eth = word(el.dataset.wei);
+  el.textContent = fmtEth(eth) + (ethUsd ? ' · ' + fmtUsd(ethUsd) : '');
+}
+
+function paintTokUsd() {
+  const el = $('tokUsd');
+  if (!el) return;
+  const n = (ethUsd || 0) + tokens.reduce((s, t) => s + (t.usd || 0), 0);
+  el.hidden = !alchOn() || n <= 0;
+  el.textContent = n > 0 ? fmtUsd(n) : '';
+}
+
+function paintDust() {
+  const b = $('tokDust');
+  if (!b) return;
+  const on = !!alchOn() && tokens.some((t) => t.usd != null || t.px === 0);
+  b.hidden = !on;
+  b.setAttribute('aria-pressed', String(hideDust));
+}
+
+function paintPin(kind, on) {
+  const v = kind === 'rpc' ? rpcPaste() : alchPaste();
+  $(kind + 'Box').hidden = !on;
+  $(kind + 'Add').setAttribute('aria-pressed', String(!!(on || v)));
+  $(kind + 'Add').setAttribute('aria-expanded', String(!!on));
+  if (on) {
+    const other = kind === 'rpc' ? 'alch' : 'rpc';
+    $(other + 'Box').hidden = true;
+    $(other + 'Add').setAttribute('aria-expanded', 'false');
+    $(other + 'Add').setAttribute('aria-pressed', String(!!(kind === 'rpc' ? alchPaste() : rpcPaste())));
+    $(kind + 'In').focus();
+  }
 }
 
 function paintTokAdd(on) {
@@ -1521,7 +1704,8 @@ async function toggleSelectAll() {
 
 function renderTokens() {
   const empty = $('tokEmpty');
-  if (empty && tokens.length) empty.hidden = true;
+  const shown = hideDust ? tokens.filter((t) => !dustTok(t, true)) : tokens;
+  if (empty && shown.length) empty.hidden = true;
   const draft = new Map();
   for (const row of $('tokens').querySelectorAll('.tok')) {
     const i = +row.querySelector('input[type="checkbox"]')?.dataset.i;
@@ -1532,13 +1716,21 @@ function renderTokens() {
       amt: row.querySelector('[data-amt]')?.value || '',
     });
   }
-  $('tokens').innerHTML = tokens
-    .map((t, i) => {
+  $('tokens').innerHTML = shown
+    .map((t) => {
+      const i = tokens.indexOf(t);
       const d = draft.get(t.address.toLowerCase()) || { on: false, amt: '' };
       const nm = t.name && t.name !== t.symbol ? `${esc(t.name)} · ` : '';
-      return `<div class="tok"><div class="tok-head"><label class="tok-pick"><input type="checkbox" data-i="${i}" ${d.on ? 'checked' : ''} /> <span class="tok-id"><span class="tok-sym">${esc(t.symbol)}</span></span></label><span class="tok-meta muted">${nm}${addrLineHtml(t.address, 'token')}</span></div><div class="ig"><input type="text" inputmode="decimal" placeholder="0" autocomplete="off" spellcheck="false" data-amt="tok" data-i="${i}" value="${esc(d.amt)}" /><button type="button" data-max="tok" data-i="${i}">Max</button></div><span class="mono">${esc(fmtAmt(t.bal, t.decimals, '', Infinity))}</span></div>`;
+      const val = t.usd != null && t.usd > 0 ? ` · ${fmtUsd(t.usd)}` : alchOn() && t.usd == null ? ' · —' : '';
+      return `<div class="tok"><div class="tok-head"><label class="tok-pick"><input type="checkbox" data-i="${i}" ${d.on ? 'checked' : ''} /> <span class="tok-id"><span class="tok-sym">${esc(t.symbol)}</span></span></label><span class="tok-meta muted">${nm}${addrLineHtml(t.address, 'token')}</span></div><div class="ig"><input type="text" inputmode="decimal" placeholder="0" autocomplete="off" spellcheck="false" data-amt="tok" data-i="${i}" value="${esc(d.amt)}" /><button type="button" data-max="tok" data-i="${i}">Max</button></div><span class="mono">${esc(fmtAmt(t.bal, t.decimals, '', Infinity))}${esc(val)}</span></div>`;
     })
     .join('');
+  if (empty && !shown.length && tokens.length && hideDust) {
+    empty.hidden = false;
+    empty.textContent = 'Dust and unpriced tokens hidden.';
+  }
+  paintTokUsd();
+  paintDust();
   paintSelectAll();
   setGo();
 }
@@ -1606,6 +1798,7 @@ initSend({
 let themeLight = false;
 try {
   themeLight = localStorage.getItem(LS_THEME) === 'light';
+  hideDust = localStorage.getItem(LS_DUST) !== '0';
 } catch {
   /* private */
 }
@@ -1683,14 +1876,15 @@ $('aaAct').onclick = () => {
 $('destMe').onclick = () => fillDestMe();
 $('destHint').onclick = () => fillDestMe(1);
 $('tokAll').onclick = () => toggleSelectAll().catch((e) => setHint('amtErr', e.message || 'Couldn’t select.'));
-$('tokMore').onclick = () => refreshAccount().catch((e) => setStatus(e.message, 'err'));
+$('tokMore').onclick = () => continueTokWalk().catch((e) => setStatus(e.message, 'err'));
 $('copyAa').onclick = () => copyAa().catch((e) => setStatus(e.message, 'err'));
 $('copySkill').onclick = () => copySkill().catch((e) => setStatus(e.message, 'err'));
 $('copyHost').onclick = () => copyHost().catch((e) => setStatus(e.message, 'err'));
 $('copyCast').onclick = () => copyCast().catch((e) => setStatus(e.message, 'err'));
 $('histMore').onclick = () => backfill(false).catch(() => {});
 $('hostSave').onclick = () => savePage().catch((e) => setStatus(e.message || 'Couldn’t save this page.', 'err'));
-$('rpcAdd').onclick = () => paintRpc($('rpcBox').hidden);
+$('rpcAdd').onclick = () => paintPin('rpc', $('rpcBox').hidden);
+$('alchAdd').onclick = () => paintPin('alch', $('alchBox').hidden);
 $('rpcIn').onchange = () => {
   const v = $('rpcIn').value.trim();
   if (v) localStorage.setItem(LS_RPC + chainId, v);
@@ -1704,11 +1898,41 @@ $('rpcIn').onchange = () => {
     histCur(hc);
   }
   setRpcUrl('');
-  paintRpc(true);
+  paintPin('rpc', true);
+  if (eoa) refreshAccount().catch((e) => setStatus(e.message, 'err'));
+};
+$('alchIn').onchange = () => {
+  const v = alchKey($('alchIn').value);
+  if (v) localStorage.setItem(LS_ALCH, v);
+  else localStorage.removeItem(LS_ALCH);
+  $('alchIn').value = v;
+  if (aa) {
+    tokCur({ ...tokCur(), t: -1, f: -1 });
+    const hc = histCur();
+    delete hc.f;
+    delete hc.fl;
+    hc.t = -1;
+    histCur(hc);
+  }
+  ethUsd = 0;
+  setRpcUrl('');
+  paintPin('alch', true);
   if (eoa) refreshAccount().catch((e) => setStatus(e.message, 'err'));
 };
 $('rpcIn').onkeydown = (e) => {
-  if (e.key === 'Escape') paintRpc(false);
+  if (e.key === 'Escape') paintPin('rpc', false);
+};
+$('alchIn').onkeydown = (e) => {
+  if (e.key === 'Escape') paintPin('alch', false);
+};
+$('tokDust').onclick = () => {
+  hideDust = !hideDust;
+  try {
+    localStorage.setItem(LS_DUST, hideDust ? '1' : '0');
+  } catch {
+    /* private */
+  }
+  renderTokens();
 };
 $('dest').oninput = () => {
   paintDestErr();
@@ -1759,6 +1983,8 @@ $('tokenIn').onkeydown = (e) => {
 };
 setChainButtons();
 markChain(chainId);
+$('alchIn').value = localStorage.getItem(LS_ALCH) || '';
+paintPin('alch', false);
 paintPageHost();
 loadSkill();
 paintSelectAll();

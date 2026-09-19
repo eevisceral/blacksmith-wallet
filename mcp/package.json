@@ -1,15 +1,16 @@
 {
   "name": "blacksmith-v1-wallet-mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "license": "MIT",
   "type": "module",
-  "description": "Stdio MCP for the Blacksmith V1 Kernel wallet: reads and dry-run drafts over public RPC. No keys, no broadcast.",
+  "description": "Stdio MCP for the Blacksmith Kernel wallet: reads, session/owner signing, policy-gated handleOps. No bundler.",
   "engines": {
     "node": ">=20"
   },
   "bin": {
-    "blacksmith-v1-wallet-mcp": "./server.mjs"
+    "blacksmith-v1-wallet-mcp": "./server.mjs",
+    "blacksmith-keystore": "./keystore-cli.mjs"
   },
   "scripts": {
     "start": "node server.mjs",

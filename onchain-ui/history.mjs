@@ -1,13 +1,17 @@
 import {
   ENTRY_POINT,
   ZERO_ADDR,
+  USER_OP_TOPIC,
+  WITHDRAWN_TOPIC,
   parseUserOpEventData,
   parseWithdrawnData,
   parseReceivedData,
   logTopicAddr,
+  topicAddress,
 } from './kernel.mjs';
 import { $, eq, hex, word, fmtAmt, fmtEth, fmtWhen, esc, LS_HIST } from './util.mjs';
-import { jrpc, getRpcUrl, call, decodeStr, pruneFloor, PRUNE_HINT } from './rpc.mjs';
+import { jrpc, getRpcUrl, call, decodeStr, pruneFloor, PRUNE_HINT, getLogs, LOGS_LOOKBACK } from './rpc.mjs';
+import { alchTransfers } from './alchemy.mjs';
 
 export const HIST_CAP = 256;
 export const HIST_V = 2;
@@ -130,6 +134,26 @@ function xferLeg(log, dir) {
   };
 }
 
+/** Alchemy Transfers API (ETH + ERC-20, including calldata ETH) plus EntryPoint UserOp/Withdrawn logs. */
+export async function discoverAlchHist(quiet, live) {
+  const aa = S.aa();
+  if (!aa) {
+    renderHist();
+    return;
+  }
+  renderHist();
+  const latest = Number(await jrpc(getRpcUrl(), 'eth_blockNumber', []));
+  const head = Math.max(0, latest - LOGS_LOOKBACK);
+  const pad = topicAddress(aa);
+  const [legs, ops, wds] = await Promise.all([
+    alchTransfers(getRpcUrl(), aa),
+    getLogs(head, latest, [USER_OP_TOPIC, null, pad], ENTRY_POINT).catch(() => []),
+    getLogs(head, latest, [WITHDRAWN_TOPIC, pad], ENTRY_POINT).catch(() => []),
+  ]);
+  if (!live()) return;
+  await mergeHistLogs({ ops, ins: [], outs: [], wds, rcv: [], legs }, quiet, live, { b: 0, t: latest, f: 0, v: HIST_V, replace: true });
+}
+
 export async function discoverHist(quiet, live, scanP) {
   const aa = S.aa();
   if (!aa) {
@@ -166,9 +190,10 @@ async function mergeHistLogs(pack, quiet, live, patch) {
 async function mergeHistLogsInner(pack, quiet, live, patch) {
   const cur = histCur();
   try {
-    const { ops, ins, outs, wds, rcv } = pack;
+    const { ops = [], ins = [], outs = [], wds = [], rcv = [] } = pack;
+    const aa = S.aa();
     if (!live()) return;
-    const seen = new Map((cur.h || []).map((x) => [String(x.hash).toLowerCase(), { ...x }]));
+    const seen = new Map(patch.replace ? [] : (cur.h || []).map((x) => [String(x.hash).toLowerCase(), { ...x }]));
     const legsBy = new Map();
     const addLeg = (hash, block, leg) => {
       if (!hash) return;
@@ -212,6 +237,9 @@ async function mergeHistLogsInner(pack, quiet, live, patch) {
       if (!g || !l.transactionHash || eq(g.from, aa)) continue;
       addLeg(l.transactionHash, Number(l.blockNumber), { d: 1, k: 'eth', amt: String(g.amount), p: g.from });
     }
+    for (const g of pack.legs || []) {
+      addLeg(g.hash, g.block, { d: g.d, k: g.k, amt: g.amt, p: g.p, sym: g.sym, dec: g.dec, ts: g.ts });
+    }
     const need = new Set();
     for (const legs of legsBy.values()) for (const x of legs) if (x.k && x.k.startsWith('0x')) need.add(x.k);
     await Promise.all([...need].map(labelTok));
@@ -221,8 +249,8 @@ async function mergeHistLogsInner(pack, quiet, live, patch) {
       const r = seen.get(k);
       r.legs = legs.map((x) => {
         if (x.k === 'ep') return { d: x.d, sym: 'prepaid gas', dec: 18, amt: x.amt, p: x.p, k: 'ep' };
-        if (x.k === 'eth') return { d: x.d, sym: 'ETH', dec: 18, amt: x.amt, p: x.p, k: 'eth' };
-        const m = tokMeta.get(x.k) || tokens.find((t) => eq(t.address, x.k)) || { symbol: x.k.slice(0, 6), decimals: 18 };
+        if (x.k === 'eth') return { d: x.d, sym: x.sym || 'ETH', dec: x.dec || 18, amt: x.amt, p: x.p, k: 'eth' };
+        const m = tokMeta.get(x.k) || tokens.find((t) => eq(t.address, x.k)) || { symbol: x.sym || x.k.slice(0, 6), decimals: x.dec || 18 };
         return { d: x.d, sym: m.symbol, dec: m.decimals, amt: x.amt, p: x.p, k: x.k };
       });
     }
@@ -245,9 +273,15 @@ async function mergeHistLogsInner(pack, quiet, live, patch) {
         }
       })
     );
-    for (const r of h0) if (times.has(r.block)) r.ts = times.get(r.block);
+    for (const r of h0) {
+      if (times.has(r.block)) r.ts = times.get(r.block);
+      else if (!r.ts) {
+        const legTs = (legsBy.get(String(r.hash).toLowerCase()) || []).map((x) => x.ts).find(Boolean);
+        if (legTs) r.ts = legTs;
+      }
+    }
     if (!live()) return;
-    histCur({ ...cur, ...patch, v: HIST_V, h: h0 });
+    histCur({ ...cur, ...patch, v: HIST_V, h: h0, replace: undefined });
     renderHist();
   } catch (e) {
     if (quiet) return;

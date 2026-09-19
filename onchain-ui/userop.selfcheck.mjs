@@ -55,6 +55,7 @@ import {
 import { renderMd, fillSkill, esc, short, hex, word, fmtAmt } from './util.mjs';
 import { decodeStr, logsFrom, getRpcUrl, getRpcAlts, setRpcUrl, archiveLogsMsg, addrRequiredLogsMsg, rangeLogsMsg, pruneFloor, transientRpcMsg, timeoutLogsMsg, unservedLogsMsg, getLogs, call, walkTransfersIn, scanAccountLogs, TOK_WALK_PUBLIC, TOK_WALK_CUSTOM, LOGS_RANGE_MAX, LOGS_LOOKBACK, LOGS_TIMEOUT_PUBLIC, LOGS_TIMEOUT_CUSTOM } from './rpc.mjs';
 import { HIST_CAP, HIST_V, HIST_TS } from './history.mjs';
+import { alchKey, alchRpc, rowsFromPortfolio, usdHold, fmtUsd, dustTok, xferLeg } from './alchemy.mjs';
 import { getPendingTx, setPendingTx, forgetPendingTx, sendFail } from './send.mjs';
 import { readFileSync, existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
@@ -164,6 +165,8 @@ for (const id of [1, 8453]) {
     process.exit(1);
   }
 }
+eq('eth WETH major', CHAINS[1].majors[0].toLowerCase(), '0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2');
+eq('base WETH major', CHAINS[8453].majors[0].toLowerCase(), '0x4200000000000000000000000000000000000006');
 eq('handleOps selector', HANDLE_OPS_SEL, '1fad948c');
 {
   const dummy = '11'.repeat(65);
@@ -583,8 +586,11 @@ for (const s of [
   'id="destMe"',
   'Use connected wallet',
   'Custom RPC',
+  'Alchemy',
   'id="rpcAdd"',
   'id="rpcIn"',
+  'id="alchAdd"',
+  'id="alchIn"',
   'Prepaid gas',
   'id="hist"',
   'id="histFork"',
@@ -601,7 +607,7 @@ for (const s of [
   'id="i-ext"',
   'id="i-copy"',
   'id="i-ok"',
-  'body:not(.on) :is(.net, .tabs, .panel-wallet, .act, .dock, #rpcAdd, #rpcBox)',
+  'body:not(.on) :is(.net, .tabs, .panel-wallet, .act, .dock, #rpcAdd, #rpcBox, #alchAdd, #alchBox)',
   '#hdrActions #connect',
   'id="connectLand"',
   'body:not(.on):not([data-tab="skill"]) #connect',
@@ -1094,6 +1100,14 @@ if (!app.includes('walkTransfersIn') || app.includes('scan.logs.ins')) {
   console.error('FAIL token discovery must walk Transfer-ins itself, not read the clipped Activity scan');
   process.exit(1);
 }
+if (!app.includes('paintTokCache') || !app.includes('continueTokWalk') || !app.includes('rememberTok')) {
+  console.error('FAIL token/activity cache must paint from localStorage and catch up without re-walking older blocks');
+  process.exit(1);
+}
+if (app.includes("$('tokMore').onclick = () => refreshAccount()") || app.includes('discoverTokens(quiet, live, scanP)')) {
+  console.error('FAIL Scan further must continue the token floor; load must not wait on Activity logs');
+  process.exit(1);
+}
 {
   const scanFn = rpcSrc.slice(rpcSrc.indexOf('async function scanLogs'), rpcSrc.indexOf('TOK_WALK_PUBLIC'));
   if (!scanFn.includes('descend') || /LOGS_LOOKBACK/.test(scanFn)) {
@@ -1296,6 +1310,71 @@ if (!wallet.includes('isAnvilFork: !cfg.baseRpc') || !wallet.includes('cfg.baseR
       console.error(`FAIL bun ${v} is not freeze pin ${BUN_PIN}`);
       process.exit(1);
     }
+  }
+}
+
+{
+  eq('alchKey url', alchKey('https://eth-mainnet.g.alchemy.com/v2/abc_KEY-1'), 'abc_KEY-1');
+  eq('alchKey raw', alchKey('  abc_KEY-1  '), 'abc_KEY-1');
+  eq('alchKey rpc skip', alchKey('http://127.0.0.1:8545'), '');
+  eq('alchRpc', alchRpc('abc', 1), 'https://eth-mainnet.g.alchemy.com/v2/abc');
+  eq('alchRpc base', alchRpc('abc', 8453), 'https://base-mainnet.g.alchemy.com/v2/abc');
+  const { rows, native } = rowsFromPortfolio(
+    [
+      {
+        network: 'eth-mainnet',
+        tokenAddress: null,
+        tokenBalance: '0x0de0b6b3a7640000',
+        tokenPrices: [{ currency: 'usd', value: '2000' }],
+      },
+      {
+        network: 'eth-mainnet',
+        tokenAddress: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+        tokenBalance: '0x' + (1_000_000n).toString(16),
+        tokenMetadata: { name: 'USD Coin', symbol: 'USDC', decimals: 6 },
+        tokenPrices: [{ currency: 'usd', value: '1' }],
+      },
+      {
+        network: 'eth-mainnet',
+        tokenAddress: '0x1111111111111111111111111111111111111111',
+        tokenBalance: '0x' + (10n ** 18n).toString(16),
+        tokenMetadata: { name: 'Junk', symbol: 'JNK', decimals: 18 },
+        tokenPrices: [],
+      },
+    ],
+    'eth-mainnet',
+  );
+  if (native.usd !== 2000) {
+    console.error('FAIL native usd', native.usd);
+    process.exit(1);
+  }
+  if (rows.length !== 2 || rows[0].symbol !== 'USDC' || rows[0].usd !== 1) {
+    console.error('FAIL portfolio rows', rows);
+    process.exit(1);
+  }
+  if (!dustTok(rows[1], true) || dustTok(rows[0], true) || dustTok({ keep: true, usd: 0.01 }, true)) {
+    console.error('FAIL dustTok');
+    process.exit(1);
+  }
+  if (usdHold(10n ** 18n, 18, 3) !== 3 || fmtUsd(12.34) !== '$12.34') {
+    console.error('FAIL usdHold/fmtUsd');
+    process.exit(1);
+  }
+  const g = xferLeg(
+    {
+      hash: '0xabc',
+      blockNum: '0x10',
+      from: '0x1111111111111111111111111111111111111111',
+      to: '0x2222222222222222222222222222222222222222',
+      asset: 'ETH',
+      rawContract: { value: '0x0de0b6b3a7640000', address: null, decimal: '0x12' },
+      metadata: { blockTimestamp: '2024-01-01T00:00:00.000Z' },
+    },
+    '0x2222222222222222222222222222222222222222',
+  );
+  if (!g || g.d !== 1 || g.k !== 'eth' || g.amt !== String(10n ** 18n)) {
+    console.error('FAIL xferLeg', g);
+    process.exit(1);
   }
 }
 

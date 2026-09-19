@@ -10,6 +10,10 @@ import {
   encodeTransfer,
   encodeFactoryCreate,
 } from '../../onchain-ui/kernel.mjs';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { writeKeystore, keystoreUnlock, keystoreLock } from '../keystore.mjs';
 import { callTool } from '../tools.mjs';
 
 /**
@@ -115,6 +119,9 @@ test('resolve_account reconnects the live page-factory Kernel', async () => {
   assert.match(text, /this page's factory/);
   assert.match(text, new RegExp(KERNEL_IMPL, 'i'));
   assert.match(text, /execute \+ executeBatch/);
+  assert.match(text, /deployed: yes · nonce 5 \(EntryPoint key 0\) · ETH 2 ETH · EntryPoint deposit 0\.05 ETH/);
+  assert.match(text, /validators: ECDSA sudo 0xd9AB5096a832b9ce79914329DAEE236f8Eea0390/);
+  assert.match(text, /session keys 0x5C06CE2b673fD5E6e56076e40DD46aB67f5a72A5/);
 });
 
 test('resolve_account returns the create path when nothing is deployed', async () => {
@@ -160,25 +167,25 @@ test('get_activity over the recent window, honest about log-less ETH', async () 
   assert.match(text, /~120000-block window/);
 });
 
-test('prepare_send drafts a native send (recorded node)', async () => {
-  const text = await callTool('prepare_send', {
+test('prepare_userop drafts a native send (recorded node)', async () => {
+  const text = await callTool('prepare_userop', {
     eoa: EOA,
     chain: 1,
     to: DEST,
     assets: [{ kind: 'eth', amount: '0.5' }],
   });
-  assert.match(text, /Dry-run send draft/);
+  assert.match(text, /Dry-run UserOp draft/);
   assert.ok(text.includes(encodeExecute(DEST, 5n * 10n ** 17n, '0x')));
   assert.match(text, /"nonce": "0x5"/);
   assert.match(text, new RegExp(USER_OP_HASH));
   // prefund = (280000 + 300000 + 80000) × 3 gwei
   assert.match(text, /Prefund 1980000000000000 wei/);
   assert.match(text, /reaches the signature check.*ready to sign/);
-  assert.match(text, /never broadcasts/);
+  assert.match(text, /sign_userop/);
 });
 
-test('prepare_send batches eth + token max into executeBatch', async () => {
-  const text = await callTool('prepare_send', {
+test('prepare_userop batches eth + token max into executeBatch', async () => {
+  const text = await callTool('prepare_userop', {
     eoa: EOA,
     chain: 1,
     to: DEST,
@@ -193,13 +200,62 @@ test('prepare_send batches eth + token max into executeBatch', async () => {
   assert.match(text, /5 USDC/);
 });
 
-test('prepare_send blocks an over-cap native send without throwing', async () => {
-  const text = await callTool('prepare_send', { eoa: EOA, chain: 1, to: DEST, assets: [{ kind: 'eth', amount: '5' }] });
-  assert.match(text, /Cannot prepare this send: ETH: 5 leaves no room for the prefund — spendable max is/);
+test('prepare_userop takes arbitrary calls — one execute, two executeBatch', async () => {
+  const one = await callTool('prepare_userop', {
+    eoa: EOA,
+    chain: 1,
+    calls: [{ to: DEST, value: '0.25', data: '0x' }],
+    simulate: false,
+  });
+  assert.match(one, /Dry-run UserOp draft/);
+  assert.ok(one.includes(encodeExecute(DEST, 25n * 10n ** 16n, '0x')));
+  assert.match(one, /0\.25 ETH → 0xd8da6bf26964af9d7eed9e03e53415d37aa96045 \(native ETH\)/i);
+
+  const two = await callTool('prepare_userop', {
+    eoa: EOA,
+    chain: 1,
+    calls: [
+      { to: DEST, value: '0x' + (10n ** 17n).toString(16) },
+      { to: USDC, data: encodeTransfer(DEST, 5000000n) },
+    ],
+    simulate: false,
+  });
+  assert.match(two, /0x34fcd5be/);
+  assert.ok(two.includes(encodeTransfer(DEST, 5000000n).slice(2)));
+  assert.match(two, /ERC-20 transfer 5 USDC/);
 });
 
-test('prepare_send on a chain without the account returns the create path', async () => {
-  const text = await callTool('prepare_send', { eoa: EOA2, chain: 1, assets: [{ kind: 'eth', amount: '0.1' }] });
+test('prepare_userop mixes asset helpers and raw calls in one batch', async () => {
+  const text = await callTool('prepare_userop', {
+    eoa: EOA,
+    chain: 1,
+    to: DEST,
+    assets: [{ kind: 'token', token: USDC, amount: '1' }],
+    calls: [{ to: DEST, value: '0.1', data: '0x' }],
+    simulate: false,
+  });
+  assert.match(text, /0x34fcd5be/);
+  assert.ok(text.includes(encodeTransfer(DEST, 1000000n).slice(2)));
+});
+
+test('prepare_userop needs assets or calls and checks prefund for raw value', async () => {
+  await assert.rejects(() => callTool('prepare_userop', { eoa: EOA, chain: 1 }), /assets.*or calls/);
+  const text = await callTool('prepare_userop', {
+    eoa: EOA,
+    chain: 1,
+    calls: [{ to: DEST, value: '5', data: '0x' }],
+    simulate: false,
+  });
+  assert.match(text, /Cannot prepare this UserOp: native ETH out leaves too little for the prefund/);
+});
+
+test('prepare_userop blocks an over-cap native send without throwing', async () => {
+  const text = await callTool('prepare_userop', { eoa: EOA, chain: 1, to: DEST, assets: [{ kind: 'eth', amount: '5' }] });
+  assert.match(text, /Cannot prepare this UserOp: ETH: 5 leaves no room for the prefund — spendable max is/);
+});
+
+test('prepare_userop on a chain without the account returns the create path', async () => {
+  const text = await callTool('prepare_userop', { eoa: EOA2, chain: 1, assets: [{ kind: 'eth', amount: '0.1' }] });
   assert.match(text, /No Kernel on Ethereum yet/);
   assert.match(text, new RegExp(ACCOUNT_FACTORY));
   assert.match(text, /not a UserOp/);
@@ -240,4 +296,53 @@ test('custom RPC is exclusive — failure never falls through to public', async 
   const customHits = hits.slice(before).map(([u]) => u);
   assert.ok(customHits.length > 0);
   assert.ok(customHits.every((u) => u === 'https://custom.invalid'), customHits.join(' '));
+});
+
+test('submit_userop dry_run on recorded node never broadcasts', async () => {
+  const draft = await callTool('prepare_userop', {
+    eoa: EOA,
+    chain: 1,
+    to: DEST,
+    assets: [{ kind: 'eth', amount: '0.5' }],
+    simulate: false,
+  });
+  const start = draft.indexOf('{');
+  const end = draft.lastIndexOf('}');
+  const userOp = JSON.parse(draft.slice(start, end + 1));
+  const before = hits.length;
+  const text = await callTool('submit_userop', { chain: 1, eoa: EOA, userOp });
+  assert.match(text, /Dry-run submit/);
+  assert.match(text, /AA24|signature/i);
+  const methods = hits.slice(before).map(([, m]) => m);
+  assert.ok(!methods.includes('eth_sendRawTransaction'));
+  assert.ok(!methods.includes('eth_sendTransaction'));
+});
+
+test('prepare → owner sign → dry_run submit on recorded RPC', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'bs-rpc-sign-'));
+  process.env.BLACKSMITH_HOME = dir;
+  process.env.BLACKSMITH_KEYSTORE = join(dir, 'k.json');
+  process.env.BLACKSMITH_KEYSTORE_PASS = 'rpc-sign';
+  writeKeystore('0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80', 'rpc-sign');
+  keystoreUnlock('rpc-sign');
+  const draft = await callTool('prepare_userop', {
+    eoa: EOA,
+    chain: 1,
+    to: DEST,
+    assets: [{ kind: 'eth', amount: '0.5' }],
+    simulate: false,
+  });
+  const userOp = JSON.parse(draft.slice(draft.indexOf('{'), draft.lastIndexOf('}') + 1));
+  const signedTxt = await callTool('sign_userop', { chain: 1, userOp, signer: 'owner' });
+  assert.match(signedTxt, /Signed with owner/i);
+  await callTool('session', { action: 'create' });
+  const sessTxt = await callTool('sign_userop', { chain: 1, userOp, signer: 'session' });
+  assert.match(sessTxt, /Signed with session/i);
+  assert.match(sessTxt, /0x00000001/);
+  assert.match(signedTxt, /0x00000000/);
+  assert.doesNotMatch(signedTxt, /ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80/i);
+  const signedOp = JSON.parse(signedTxt.slice(signedTxt.indexOf('{'), signedTxt.lastIndexOf('}') + 1));
+  const dry = await callTool('submit_userop', { chain: 1, eoa: EOA, userOp: signedOp });
+  assert.match(dry, /Dry-run submit/);
+  keystoreLock();
 });

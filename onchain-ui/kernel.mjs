@@ -18,6 +18,22 @@ export const KERNEL_V2_IMPLS = [
   KERNEL_IMPL,
 ];
 export const ECDSA_VALIDATOR = '0xd9AB5096a832b9ce79914329DAEE236f8Eea0390';
+/** Kernel v2 / EntryPoint v0.6 session-key validator (same CREATE2 on Ethereum and Base). */
+export const SESSION_KEY_VALIDATOR = '0x5C06CE2b673fD5E6e56076e40DD46aB67f5a72A5';
+/** keccak256("ValidatorApproved(bytes4 sig,uint256 validatorData,address executor,bytes enableData)") */
+export const VALIDATOR_APPROVED_STRUCT_HASH =
+  '0x3ce406685c1b3551d706d85a68afdaa49ac4e07b451ad9b8ff8b58c3ee964176';
+export const EIP712_DOMAIN_TYPEHASH =
+  '0x8b73c3c69bb8fe3d512ecc4cf759cc79239f7b179b0ffacaa9a75d522b39400f';
+export const KERNEL_EIP712_NAME = 'Kernel';
+export const KERNEL_EIP712_VERSION = '0.2.4';
+
+/** Packed 20-byte tokens (no 0x); same contracts as the quoted list, lowercase. */
+function hexAddrs(s) {
+  const o = [];
+  for (let i = 0; i < s.length; i += 40) o.push('0x' + s.slice(i, i + 40));
+  return o;
+}
 
 /** Pinned 2026-09-17 from chainlist.org/rpcs.json, probed live for deep (2023) receipts.
  *  Every URL here served unaddressed 2023 Transfer logs; order is measured latency.
@@ -35,59 +51,9 @@ export const CHAINS = {
     explorer: 'https://etherscan.io/tx/',
     // High-cap ERC-20s probed with balanceOf at head, so holdings show even when
     // the node cannot serve old Transfer logs. Balances still come from the contracts.
-    majors: [
-      '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2',
-      '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
-      '0xdAC17F958D2ee523a2206206994597C13D831ec7',
-      '0x6B175474E89094C44Da98b954EedeAC495271d0F',
-      '0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599',
-      '0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984',
-      '0x514910771AF9Ca656af840dff83E8264EcF986CA',
-      '0x95aD61b0a150d79219dCF64E1E6Cc01f0B64C4cE',
-      '0x6982508145454Ce325dDbE47a25d4ec3d2311933',
-      '0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84',
-      '0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0',
-      '0xae78736Cd615f374D3085123A210448E74Fc6393',
-      '0xBe9895146f7AF43049ca1c1AE358B0541Ea49704',
-      '0x7Fc66500c84A76Ad7e9c93437bFc5Ac33E2DDaE9',
-      '0x9f8F72aA9304c8B593d555F12eF6589cC3A579A2',
-      '0x5A98FcBEA516Cf06857215779Fd812CA3beF1B32',
-      '0xD533a949740bb3306d119CC777fa900bA034cd52',
-      '0xC011a73ee8576Fb46F5E1c5751cA3B9Fe0af2a6F',
-      '0xc00e94Cb662C3520282E6f5717214004A7f26888',
-      '0xc944E90C64B2c07662A292be6244BDf05Cda44a7',
-      '0xC18360217D8F7Ab5e7c516566761Ea12Ce7F9D72',
-      '0xB50721BCf8d664c30412Cfbc6cf7a15145234ad1',
-      '0x4200000000000000000000000000000000000042',
-      '0x6De037ef9aD2725EB40118Bb1702EBb27e4Aeb24',
-      '0xaea46A60368A7bD060eec7DF8CBa43b7EF41Ad85',
-      '0x45804880De22913dAFE09f4980848ECE6EcbAf78',
-      '0xfAbA6f8e4a5E8Ab82F62fe7C39859FA577269BE3',
-      '0x4c9EDD5852cd905f086C759E8383e09bff1E68B3',
-      '0x6c3ea9036406852006290770BEdFcAbA0e23A0e8',
-      '0x853d955aCEf822Db058eb8505911ED77F175b99e',
-      '0x5f98805A4E8be255a32880FDeC7F6728C6568bA0',
-      '0xf939E0A03FB07F59A73314E73794Be0E57ac1b4E',
-      '0x40D16FC0246aD3160Ccc09B8D0D3A2cD28aE6C2f',
-      '0xCd5fE23C85820F7B72D0926FC9b05b43E359b7ee',
-      '0xbf5495Efe5DB9ce00f80364C8B423567e58d2110',
-      '0xA1290d69c65A6Fe4DF752f95823fae25cB99e5A7',
-      '0xec53bF9167f50cDEB3Ae105f56099aaaB9061F83',
-      '0x455e53CBB86018Ac2B8092FdCd39d8444aFFC3F6',
-      '0x4d224452801ACEd8B2F0aebE155379bb5D594381',
-      '0x3845badAde8e6dFF049820680d1F14bD3903a5d0',
-      '0x0F5D2fB29fb7d3CFeE444a200298f468908cC942',
-      '0x0D8775F648430679A709E98d2b0Cb6250d2887EF',
-      '0xE41d2489571d322189246DaFA5ebDe1F4699F498',
-      '0xba100000625a3754423978a60c9317c58a424e3D',
-      '0x0bc529c00C6401aEF6D220BE8C6Ea1667F6Ad93e',
-      '0x111111111117dC0aa78b770fA6A738034120C302',
-      '0xD33526068D116cE69F19A9ee46F0bd304F21A51f',
-      '0x6810e776880C02933D47DB1b9fc05908e5386b96',
-      '0x5283D291DBCF85356A21bA090E6db59121208b44',
-      '0x56072C95FAA701256059aa122697B133aDEd9279',
-      '0xdC035D45d973E3EC169d2276DDab16f1e407384F',
-    ],
+    majors: hexAddrs(
+      'c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48dac17f958d2ee523a2206206994597c13d831ec76b175474e89094c44da98b954eedeac495271d0f2260fac5e5542a773aa44fbcfedf7c193bc2c5991f9840a85d5af5bf1d1762f925bdaddc4201f984514910771af9ca656af840dff83e8264ecf986ca95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce6982508145454ce325ddbe47a25d4ec3d2311933ae7ab96520de3a18e5e111b5eaab095312d7fe847f39c581f595b53c5cb19bd0b3f8da6c935e2ca0ae78736cd615f374d3085123a210448e74fc6393be9895146f7af43049ca1c1ae358b0541ea497047fc66500c84a76ad7e9c93437bfc5ac33e2ddae99f8f72aa9304c8b593d555f12ef6589cc3a579a25a98fcbea516cf06857215779fd812ca3bef1b32d533a949740bb3306d119cc777fa900ba034cd52c011a73ee8576fb46f5e1c5751ca3b9fe0af2a6fc00e94cb662c3520282e6f5717214004a7f26888c944e90c64b2c07662a292be6244bdf05cda44a7c18360217d8f7ab5e7c516566761ea12ce7f9d72b50721bcf8d664c30412cfbc6cf7a15145234ad142000000000000000000000000000000000000426de037ef9ad2725eb40118bb1702ebb27e4aeb24aea46a60368a7bd060eec7df8cba43b7ef41ad8545804880de22913dafe09f4980848ece6ecbaf78faba6f8e4a5e8ab82f62fe7c39859fa577269be34c9edd5852cd905f086c759e8383e09bff1e68b36c3ea9036406852006290770bedfcaba0e23a0e8853d955acef822db058eb8505911ed77f175b99e5f98805a4e8be255a32880fdec7f6728c6568ba0f939e0a03fb07f59a73314e73794be0e57ac1b4e40d16fc0246ad3160ccc09b8d0d3a2cd28ae6c2fcd5fe23c85820f7b72d0926fc9b05b43e359b7eebf5495efe5db9ce00f80364c8b423567e58d2110a1290d69c65a6fe4df752f95823fae25cb99e5a7ec53bf9167f50cdeb3ae105f56099aaab9061f83455e53cbb86018ac2b8092fdcd39d8444affc3f64d224452801aced8b2f0aebe155379bb5d5943813845badade8e6dff049820680d1f14bd3903a5d00f5d2fb29fb7d3cfee444a200298f468908cc9420d8775f648430679a709e98d2b0cb6250d2887efe41d2489571d322189246dafa5ebde1f4699f498ba100000625a3754423978a60c9317c58a424e3d0bc529c00c6401aef6d220be8c6ea1667f6ad93e111111111117dc0aa78b770fa6a738034120c302d33526068d116ce69f19a9ee46f0bd304f21a51f6810e776880c02933d47db1b9fc05908e5386b965283d291dbcf85356a21ba090e6db59121208b4456072c95faa701256059aa122697b133aded9279dc035d45d973e3ec169d2276ddab16f1e407384f',
+    ),
   },
   8453: {
     name: 'Base',
@@ -99,32 +65,9 @@ export const CHAINS = {
       'https://gateway.tenderly.co/public/base',
     ],
     explorer: 'https://basescan.org/tx/',
-    majors: [
-      '0x4200000000000000000000000000000000000006',
-      '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
-      '0xd9aAEc86B65D86f6A7B5B1b0c42FFA531710b6CA',
-      '0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb',
-      '0x2Ae3F1Ec7F1F5012CFEab0185bfc7aa3cf0DEc22',
-      '0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf',
-      '0x940181a94A35A4569E4529A3CDfB74e38FD98631',
-      '0x4ed4E862860beD51a9570b96d89aF5E1B0Efefed',
-      '0x532f27101965dd16442E59d40670FaF5eBB142E4',
-      '0xAC1Bd2486aAf3B5C0fc3Fd868558b082a531B2B4',
-      '0xc1CBa3fCea344f92D9239c08C0568f6F2F0ee452',
-      '0x0b3e328455c4059EEb9e3f84b5543F74E24e7E1b',
-      '0x1bc0c42215582d5A085795f4baDbaC3ff36d1Bcb',
-      '0x0578d8A44db98B23BF096A382e016e29a5Ce0ffe',
-      '0x60a3E35Cc302bFA44Cb288Bc5a4F316Fdb1adb42',
-      '0x1111111111166b7FE7bd91427724B487980aFc69',
-      '0xA88594D404727625A9437C3f886C7643872296AE',
-      '0xBAa5CC21fd487B8Fcc2F632f3F4E8D37262a0842',
-      '0xA99F6e6785Da0F5d6fB42495Fe424BCE029Eeb2E',
-      '0x04C0599Ae5A44757c0af6F9eC3b93da8976c150A',
-      '0x820C137fa70C8691f0e44Dc420a5e53c168921Dc',
-      '0x1C7a460413dD4e964f96D8dFC56E7223cE88CD85',
-      '0xB1a03EdA10342529bBF8EB700a06C60441fEf25d',
-      '0x4F9Fd6Be4a90f2620860d680c0d4d5Fb53d1A825',
-    ],
+    majors: hexAddrs(
+      '4200000000000000000000000000000000000006833589fcd6edb6e08f4c7c32d4f71b54bda02913d9aaec86b65d86f6a7b5b1b0c42ffa531710b6ca50c5725949a6f0c72e6c4a641f24049a917db0cb2ae3f1ec7f1f5012cfeab0185bfc7aa3cf0dec22cbb7c0000ab88b473b1f5afd9ef808440eed33bf940181a94a35a4569e4529a3cdfb74e38fd986314ed4e862860bed51a9570b96d89af5e1b0efefed532f27101965dd16442e59d40670faf5ebb142e4ac1bd2486aaf3b5c0fc3fd868558b082a531b2b4c1cba3fcea344f92d9239c08c0568f6f2f0ee4520b3e328455c4059eeb9e3f84b5543f74e24e7e1b1bc0c42215582d5a085795f4badbac3ff36d1bcb0578d8a44db98b23bf096a382e016e29a5ce0ffe60a3e35cc302bfa44cb288bc5a4f316fdb1adb421111111111166b7fe7bd91427724b487980afc69a88594d404727625a9437c3f886c7643872296aebaa5cc21fd487b8fcc2f632f3f4e8d37262a0842a99f6e6785da0f5d6fb42495fe424bce029eeb2e04c0599ae5a44757c0af6f9ec3b93da8976c150a820c137fa70c8691f0e44dc420a5e53c168921dc1c7a460413dd4e964f96d8dfc56e7223ce88cd85b1a03eda10342529bbf8eb700a06c60441fef25d4f9fd6be4a90f2620860d680c0d4d5fb53d1a825',
+    ),
   },
 };
 
@@ -155,6 +98,9 @@ export function explorerOrigin(chain) {
 export const PAGE_HOST = '';
 
 const SUDO = '00000000';
+export const SIG_MODE_SUDO = SUDO;
+export const SIG_MODE_PLUGIN = '00000001';
+export const SIG_MODE_ENABLE = '00000002';
 export const EXECUTE_SEL = '51945447';
 export const EXECUTE_BATCH_SEL = '34fcd5be';
 const TRANSFER_SEL = 'a9059cbb';
@@ -434,6 +380,88 @@ export function packSudoSignature(ecdsa65) {
   const s = strip(ecdsa65);
   if (s.length !== 130) throw new Error('ECDSA signature must be 65 bytes');
   return '0x' + SUDO + s;
+}
+
+export function packPluginSignature(validator, body) {
+  return '0x' + SIG_MODE_PLUGIN + strip(validator).padStart(40, '0') + strip(body);
+}
+
+/** SessionKeyValidator enable() payload: key ‖ merkleRoot ‖ validAfter ‖ validUntil ‖ paymaster ‖ nonce. merkleRoot 0 = session-key ECDSA only (validator-level; MCP policy still applies). */
+export function encodeSessionEnableData({
+  sessionKey,
+  merkleRoot = '0x' + '00'.repeat(32),
+  validAfter = 0,
+  validUntil = 0xfffffffffffe,
+  paymaster = '0x0000000000000000000000000000000000000000',
+  nonce,
+}) {
+  const va = BigInt(validAfter).toString(16).padStart(12, '0');
+  const vu = BigInt(validUntil).toString(16).padStart(12, '0');
+  return (
+    '0x' +
+    strip(sessionKey).padStart(40, '0') +
+    strip(merkleRoot).padStart(64, '0') +
+    va +
+    vu +
+    strip(paymaster).padStart(40, '0') +
+    BigInt(nonce).toString(16).padStart(64, '0')
+  );
+}
+
+export function encodeSessionDisableKey(sessionKey) {
+  return '0x' + strip(sessionKey).padStart(40, '0');
+}
+
+/** SessionKeyValidator.validateUserOp inner signature: session key address ‖ 65-byte ECDSA (personal_sign of userOpHash). */
+export function packSessionKeyBody(sessionKey, ecdsa65) {
+  const s = strip(ecdsa65);
+  if (s.length !== 130) throw new Error('ECDSA signature must be 65 bytes');
+  return '0x' + strip(sessionKey).padStart(40, '0') + s;
+}
+
+export function packSessionPluginSignature(sessionKey, ecdsa65, validator = SESSION_KEY_VALIDATOR) {
+  return packPluginSignature(validator, packSessionKeyBody(sessionKey, ecdsa65));
+}
+
+/** 32-byte validatorData used in enable-mode signatures and ValidatorApproved. */
+export function sessionValidatorData(validAfter, validUntil, validator = SESSION_KEY_VALIDATOR) {
+  return (
+    '0x' +
+    BigInt(validAfter).toString(16).padStart(12, '0') +
+    BigInt(validUntil).toString(16).padStart(12, '0') +
+    strip(validator).padStart(40, '0')
+  );
+}
+
+/**
+ * Kernel mode 0x00000002: approve a validator for this callData selector, enable() it, then validate the UserOp.
+ * Layout: mode ‖ validAfter(6) ‖ validUntil(6) ‖ validator(20) ‖ executor(20) ‖ enableDataLen(32) ‖ enableData ‖ enableSigLen(32) ‖ enableSig ‖ validatorSig.
+ */
+export function packEnableSignature({
+  validAfter = 0,
+  validUntil = 0xfffffffffffe,
+  validator = SESSION_KEY_VALIDATOR,
+  executor = ZERO_ADDR,
+  enableData,
+  enableSig,
+  validatorSig,
+}) {
+  const ed = strip(enableData);
+  const es = strip(enableSig);
+  const vs = strip(validatorSig);
+  return (
+    '0x' +
+    SIG_MODE_ENABLE +
+    BigInt(validAfter).toString(16).padStart(12, '0') +
+    BigInt(validUntil).toString(16).padStart(12, '0') +
+    strip(validator).padStart(40, '0') +
+    strip(executor).padStart(40, '0') +
+    u256(ed.length / 2) +
+    ed +
+    u256(es.length / 2) +
+    es +
+    vs
+  );
 }
 
 export function requiredPrefund(callGas, verificationGas, preVerificationGas, maxFeePerGas) {

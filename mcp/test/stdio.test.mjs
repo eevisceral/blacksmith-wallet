@@ -53,14 +53,26 @@ test('stdio handshake, tools/list, tools/call, error shapes', async () => {
     assert.equal(init.result.serverInfo.name, 'blacksmith-v1-wallet');
     assert.equal(init.result.protocolVersion, '2025-06-18');
     assert.ok(init.result.capabilities.tools);
-    assert.match(init.result.instructions, /never hold keys/);
+    assert.match(init.result.instructions, /policy/);
 
     await call({ jsonrpc: '2.0', method: 'notifications/initialized' });
 
     const list = await call({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} });
     assert.deepEqual(
       list.result.tools.map((t) => t.name),
-      ['resolve_account', 'get_balances', 'list_tokens', 'get_activity', 'prepare_send', 'explain_userop', 'wallet_url'],
+      [
+        'resolve_account',
+        'get_balances',
+        'list_tokens',
+        'get_activity',
+        'prepare_userop',
+        'explain_userop',
+        'wallet_url',
+        'keystore',
+        'session',
+        'sign_userop',
+        'submit_userop',
+      ],
     );
 
     const url = await call({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'wallet_url', arguments: {} } });
