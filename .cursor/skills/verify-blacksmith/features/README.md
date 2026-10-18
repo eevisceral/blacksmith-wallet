@@ -20,7 +20,7 @@ Read this index, then the feature file. A passing connect run does not verify se
 
 ## Features
 
-- [Connect](./connect.md) shows the smart-account address after Connect wallet.
+- [Connect](./connect.md) shows the Kernel address after Connect wallet.
 - [Send](./send.md) fills Max and refuses a send that would take the gas reserve.
 - [Activity](./activity.md) opens the activity list. The seeded fork shows rows.
 - [Manual](./skill.md) opens the in-page SKILL.md tab.

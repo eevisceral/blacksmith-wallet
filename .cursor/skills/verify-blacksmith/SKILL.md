@@ -63,9 +63,9 @@ Chrome is headless, with a fresh user-data dir, remote debugging, and the flags 
 Stable handles:
 
 - `#connectLand` is Connect wallet on the landing. After connect, `#connect` is the disconnect chip.
-- `#aa` title is the smart-account address after connect.
+- `#aa` title is the Kernel address after connect.
 - `#ethBal` is the ETH balance text. `dataset.wei` is the raw balance.
-- `#go` is Send. `#create` is Create account. `#pendClear` is Dismiss stuck transaction.
+- `#go` is Send. `#create` is Create Kernel. `#pendClear` is Clear pending transaction.
 - `#c1` and `#c8453` are the network buttons (`aria-pressed`).
 - `#dest` is the recipient. `#amtEth` and `[data-max="eth"]` are the ETH amount and Max.
 - `#tab-activity` and `#tab-skill` switch panels. `#skillView` is the manual.
@@ -100,7 +100,7 @@ Connect, Send, and Activity rows on the live host need an injected EOA. Without 
 
 Write under `/tmp/blacksmith-verify-evidence/<run-id>/`.
 
-- `connect.json` has the address shown in `#aa` and the ETH balance text.
+- `connect.json` has the opened question text, the address shown in `#aa`, and the ETH balance text.
 - `rest.json` has the manual, Max reserve, cleared recipient, activity row count, and connected manual.
 - `pin.json` has live factory/host flags, gateway URL, `#hostAddr`, landing title, and skill proof.
 - A screenshot is optional. The address plus the balance text is the proof for connect on the fork, because the address must equal the legacy factory `getAccountAddress` for Anvil account 0 on this fork. That Anvil address is not the live-chain proof.
@@ -114,6 +114,7 @@ Kill only pids this run started: the `run.mjs` pid in `server.pid`, and the Chro
 ```
 if [ -f /tmp/blacksmith-verify-evidence/<run-id>/server.pid ]; then kill "$(cat /tmp/blacksmith-verify-evidence/<run-id>/server.pid)" || true; fi
 if [ -f /tmp/blacksmith-verify-evidence/<run-id>/chrome.pid ]; then kill "$(cat /tmp/blacksmith-verify-evidence/<run-id>/chrome.pid)" || true; fi
+if [ -f /tmp/blacksmith-verify-evidence/<run-id>/chrome-rest.pid ]; then kill "$(cat /tmp/blacksmith-verify-evidence/<run-id>/chrome-rest.pid)" || true; fi
 if [ -f /tmp/blacksmith-verify-evidence/<run-id>/chrome-pin.pid ]; then kill "$(cat /tmp/blacksmith-verify-evidence/<run-id>/chrome-pin.pid)" || true; fi
 ```
 

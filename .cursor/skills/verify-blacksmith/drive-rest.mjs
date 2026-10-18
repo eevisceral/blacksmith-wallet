@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-/** After the page is up, drive the manual, Max, an empty recipient, and Activity. */
 import { spawn } from 'node:child_process';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -38,7 +37,6 @@ while (Date.now() - t0 < 15000) {
       break;
     }
   } catch {
-    /* chrome still starting */
   }
   await new Promise((r) => setTimeout(r, 150));
 }
@@ -80,7 +78,7 @@ const snap = await js(`(async () => {
   document.getElementById('skillOpen').click();
   await sleep(300);
   const landing = document.getElementById('skillView')?.innerText || '';
-  const landingOk = landing.includes('Blacksmith V1 wallet') && landing.includes('EntryPoint') && landing.includes(factory);
+  const landingOk = landing.includes('Blacksmith V1 wallet') && landing.includes('EntryPoint') && landing.includes(factory) && landing.includes('index 0, the only index this page uses') && !landing.includes('pages.dev');
   const copyOnLanding = document.getElementById('copySkill')?.disabled === false;
   document.getElementById('skillBack')?.click();
   document.getElementById('connectLand').click();
@@ -123,9 +121,11 @@ const snap = await js(`(async () => {
   };
   document.getElementById('tab-skill').click();
   const connectedSkill = document.getElementById('skillView')?.innerText || '';
-  const skillOk = connectedSkill.includes('Blacksmith V1 wallet') && connectedSkill.includes(factory);
-  const ok = landingOk && copyOnLanding && cleared && !activity.hidden && activity.rows > 0 && activity.localShown && skillOk;
-  return { ok, landingOk, copyOnLanding, connected, max, cleared, activity, skillOk };
+  const skillOk = connectedSkill.includes('Blacksmith V1 wallet') && connectedSkill.includes(factory) && connectedSkill.includes('(connected account)') && (connectedSkill.includes('(derived from connected)') || connectedSkill.includes('not deployed on this chain'));
+  const emptyOk = (activity.emptyText || '').includes('No activity yet. Token transfers, sends from this Kernel, and ETH received with no calldata show up here.');
+  const pendHidden = document.getElementById('pendClear')?.hidden === true;
+  const ok = landingOk && copyOnLanding && cleared && pendHidden && emptyOk && !activity.hidden && activity.rows > 0 && activity.localShown && skillOk;
+  return { ok, landingOk, copyOnLanding, connected, max, cleared, pendHidden, emptyOk, activity, skillOk };
 })()`);
 
 if (!snap?.ok) die('rest journeys failed ' + JSON.stringify(snap));

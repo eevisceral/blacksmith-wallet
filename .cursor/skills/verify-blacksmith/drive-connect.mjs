@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-/** Click Connect on the local wallet page and write the address the page shows. */
 import { spawn } from 'node:child_process';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -38,7 +37,6 @@ while (Date.now() - t0 < 15000) {
       break;
     }
   } catch {
-    /* chrome still starting */
   }
   await new Promise((r) => setTimeout(r, 150));
 }
@@ -73,6 +71,13 @@ while (Date.now() - ready < 20000) {
   if (await js(`document.readyState === 'complete' && !!document.getElementById('connectLand')`)) break;
   await new Promise((r) => setTimeout(r, 150));
 }
+const ask = await js(`(() => {
+  const btn = document.querySelector('[aria-controls="ask-4"]');
+  btn.click();
+  const body = document.getElementById('ask-4');
+  return { open: body && !body.hidden, text: body?.innerText || '' };
+})()`);
+if (!ask?.open || !String(ask.text).includes('Kernel')) die('question did not open ' + JSON.stringify(ask));
 await js(`document.getElementById('connectLand').click()`);
 const until = Date.now() + 30000;
 let snap = null;
@@ -86,7 +91,7 @@ while (Date.now() < until) {
   await new Promise((r) => setTimeout(r, 200));
 }
 if (!snap) die('connect did not show an account');
-writeFileSync(join(outDir, 'connect.json'), JSON.stringify({ origin, ...snap }, null, 2) + '\n');
+writeFileSync(join(outDir, 'connect.json'), JSON.stringify({ origin, ask: ask.text, ...snap }, null, 2) + '\n');
 console.log(JSON.stringify(snap));
 ws.close();
 chrome.kill();

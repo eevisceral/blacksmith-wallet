@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-/** Live host html() plus the w3link landing and inlined manual. No Connect. */
 import { spawn } from 'node:child_process';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -52,7 +51,6 @@ while (Date.now() - t0 < 25000) {
       break;
     }
   } catch {
-    /* chrome still starting */
   }
   await new Promise((r) => setTimeout(r, 150));
 }

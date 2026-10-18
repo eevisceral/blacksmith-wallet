@@ -9,7 +9,7 @@ The freeze is VersionHost `html()` on Ethereum and Base. This is not Connect, Se
 
 ## How to get to it (user POV)
 
-- Open `https://0x885affd4766d70512e35470E82453a9D8aA1D48C.1.w3link.io/`. Heading is Your smart account. The page contract address is in This page. Connect wallet is there. SKILL.md opens the inlined manual.
+- Open `https://0x885affd4766d70512e35470E82453a9D8aA1D48C.1.w3link.io/`. Heading is Your smart account. `#hostAddr` is the page contract, filled from that URL. Connect wallet is there. SKILL.md opens the manual that was inlined at the last pin. The playground sections The account, This page, and Questions are source copy. They are not what this gateway shows until a new VersionHost is broadcast.
 - The same host is `web3://0x885affd4766d70512e35470E82453a9D8aA1D48C` and Base `https://0x885affd4766d70512e35470E82453a9D8aA1D48C.8453.w3link.io/`.
 
 ## Driving it with Chrome DevTools
