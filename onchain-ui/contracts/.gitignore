@@ -1,0 +1,19 @@
+# Compiler artifacts
+cache/
+out/
+
+# Logs
+.logs/
+.ignore/
+
+# Operator forge receipts stay local. The pin is live html() keccak.
+/broadcast/
+/broadcast-fork/
+
+# Nested docs dir (not used)
+docs/
+
+# Env
+.env
+.env.*
+!.env.example
