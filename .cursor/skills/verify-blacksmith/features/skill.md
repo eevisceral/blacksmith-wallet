@@ -24,4 +24,4 @@ Preconditions:
 
 ## Gotchas
 
-- The manual in the page is the built copy after a freeze restamp. A source edit that was not restamped will not appear in `dist/index.html`. This dev server serves the source `SKILL.md`.
+- The freeze (`dist/index.html`, pages.dev, VersionHost) inlines `SKILL.md`. The playground at `:8765` fetches repo-root `/SKILL.md`. A source edit that was not restamped shows on the playground and not on the pin. For freeze proof, drive pages.dev via `drive-pin.mjs`, not `:8765`.

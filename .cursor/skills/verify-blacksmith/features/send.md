@@ -12,7 +12,8 @@ After connect, To is already the connected wallet. Max checks the ETH row and fi
 - Connect, then stay on the Wallet tab. To (`#dest`) is the connected wallet.
 - Choose Max on the ETH row. That checks the row.
 - Clear To to see Send go disabled. Use connected wallet puts the address back.
-- Choose Send (`#go`) only on the fork, and only when the thing under test is the send itself.
+- `#destMe` writes the connected wallet. `#destHint` (Your wallet) clears To.
+- Choose Send (`#go`) only on the fork, and only when the thing under test is the send itself. Never click Send on Ethereum or Base.
 
 ## Driving it with Chrome DevTools
 

@@ -20,7 +20,7 @@ Preconditions:
 - Connect has succeeded.
 
 - **Open Activity.** Run `document.getElementById('tab-activity').click()`. `#panel-activity` is not hidden.
-- **Proof.** On the seeded fork, `#hist li` count is greater than 0, `#histEmpty` is hidden, and `#histFork` (Local) is shown. The empty line, when the list has no rows, reads `No activity yet. Sends, token transfers, and ETH this account received show up here.`
+- **Proof.** On the seeded fork, `#hist li` count is greater than 0, `#histEmpty` is hidden, and `#histFork` (Local) is shown. The empty line, when the list has no rows, reads `No activity yet. Sends, token transfers, and ETH this account received show up here.` A new Kernel on pages.dev should show that empty line and hide `#histFork`. Without an injected wallet, live Activity is `verified-unreachable`.
 
 ## Gotchas
 

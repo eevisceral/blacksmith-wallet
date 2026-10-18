@@ -22,7 +22,7 @@ Preconditions:
 
 - **Open the page.** Load `http://127.0.0.1:8765/`. The heading reads Your smart account and `#connectLand` is present.
 - **Connect.** Run `node .cursor/skills/verify-blacksmith/drive-connect.mjs /tmp/blacksmith-verify-evidence/<run-id>`. The script clicks `#connectLand`.
-- **Proof.** `connect.json` in that directory has `aa` of length 42 and `bal` not equal to `-`. On the seeded Ethereum fork, `aa` is the legacy factory `getAccountAddress` for `0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266`.
+- **Proof.** `connect.json` in that directory has `aa` of length 42 and `bal` not equal to `-`. On the seeded Ethereum fork, `aa` is the legacy factory `getAccountAddress` for `0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266`. That address is not the expected `#aa` on pages.dev. Live connect needs an injected wallet. Without one, mark live Connect `verified-unreachable`.
 
 ## Gotchas
 
