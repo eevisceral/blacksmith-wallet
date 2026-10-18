@@ -1,0 +1,7 @@
+{
+  "max_native_wei": "0",
+  "max_erc20": {},
+  "allow_recipients": ["0x0000000000000000000000000000000000000001"],
+  "allow_arbitrary_calls": false,
+  "require_dry_run_first": true
+}
