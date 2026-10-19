@@ -78,6 +78,8 @@ Creation txs (Nick factory). Forge `broadcast/` JSON is local operator log — n
 ```
 Ethereum factory  0xee74493a0e9e83ad497f21e1498c4f1f8c0e87ad54a8bfd4a30f39bbe2491b36
 Base factory      0xe8407df5815934db315d75e1e70aadac1a0d6316e99f67c79c75b9659fde879b
+Ethereum host     0x7ac0630028388c6bed797dcf6043145faf234ad2902d78c392e1e79b1778aa4f
+Base host         0x6d37b8a6e4fab465dbe7e6a27feb973e0caca1e26f9c00cfeaba3284a522f2c5
 ```
 
 The pin is `html()` keccak at that host, not a gateway. Open it as `web3://0x15f850670574fB03C751B59726d8A1E411161aCD` (Base `:8453`) or via a 5219 HTTPS gateway (`https://0x15f850670574fB03C751B59726d8A1E411161aCD.1.w3link.io/` / `.8453.w3link.io/`). Gateways call `request()` and may wrap the HTML. VersionHost capacity is 1–16 chunks. `dist/index.html` is the page those commands deploy. Changing it changes the keccak and the host address.
