@@ -6,7 +6,7 @@ import {
   KERNEL_EIP712_NAME,
   KERNEL_EIP712_VERSION,
   encodeGetNonce,
-  encodeGetUserOpHash,
+  hashUserOp,
   encodeHandleOps,
   encodeSessionEnableData,
   encodeSessionDisableKey,
@@ -18,14 +18,25 @@ import {
 } from '../onchain-ui/kernel.mjs';
 import { call, jrpc, getRpcUrl } from '../onchain-ui/rpc.mjs';
 import { word, hex } from '../onchain-ui/util.mjs';
-import { keccak256, personalSign, signHash, eip712Hash, signEip1559Tx, hexBuf } from './eth-crypto.mjs';
-import { unlockedOwner } from './keystore.mjs';
-import { unlockedSession, sessionUnlock } from './session.mjs';
-import { loadPolicy, policyCheck, sessionCovers, markDryRun, sawDryRun } from './policy.mjs';
+import { keccak256, eip712Hash } from './eth-crypto.mjs';
+import { castMktx, castSign } from './cast-sign.mjs';
+import { keystorePath, requireUnlockedOwner, unlockedOwner, withPasswordFile } from './keystore.mjs';
+import { unlockedSession, sessionUnlock, withUnlockedSession } from './session.mjs';
+import { loadPolicy, policyCheck, reserveSpend, sessionCovers, markDryRun, sawDryRun } from './policy.mjs';
 import { decodeCallData } from './tools-decode.mjs';
 import { encodeBatchProof, encodePermissionProof, sessionMerkle } from './session-merkle.mjs';
 
 const strip = (h) => String(h || '').replace(/^0x/i, '').toLowerCase();
+const signedHold = new Map();
+
+export function rememberSigned(op, userOpHash) {
+  signedHold.set(String(userOpHash).toLowerCase(), op);
+  return op;
+}
+
+export function heldSigned(userOpHash) {
+  return signedHold.get(String(userOpHash).toLowerCase()) || null;
+}
 
 function abiWord(h) {
   return strip(h).padStart(64, '0');
@@ -58,8 +69,14 @@ export function validatorApprovedDigest({ chainId, kernel, selector, validatorDa
   return eip712Hash(kernelDomainSeparator(chainId, kernel), structHash);
 }
 
-export async function userOpHashOf(op) {
-  return '0x' + (await call(ENTRY_POINT, encodeGetUserOpHash(op))).slice(-64);
+export async function userOpHashOf(op, chainId) {
+  const cid = Number(chainId);
+  if (cid !== 1 && cid !== 8453) throw new Error('chain must be 1 or 8453.');
+  const rpcChainId = Number(await jrpc(getRpcUrl(), 'eth_chainId', [], 8000));
+  if (rpcChainId !== cid) {
+    throw new Error(`RPC chainId ${rpcChainId} does not match requested chain ${cid}. Refusing to sign against that node.`);
+  }
+  return hashUserOp(op, cid);
 }
 
 export function emptyOpFields(op) {
@@ -102,8 +119,10 @@ export async function signUserOp(op, opts = {}) {
   const useSession = prefer !== 'owner' && session && !sessionMiss;
   if (prefer === 'session' && sessionMiss) throw new Error('Session key cannot sign this UserOp: ' + sessionMiss);
   if (useSession) {
-    const hash = await userOpHashOf({ ...op, signature: '0x' });
-    const sig = personalSign(session.priv, hash);
+    const hash = await userOpHashOf({ ...op, signature: '0x' }, opts.chainId);
+    const held = reserveSpend(op, hash);
+    if (held) throw new Error(held);
+    const sig = withUnlockedSession((file, pw) => castSign(file, pw, hash, { personal: true }));
     let packed = packSessionPluginSignature(session.address, sig);
     if (!session.unrestricted) {
       const decoded = decodeCallData(op.callData);
@@ -126,7 +145,9 @@ export async function signUserOp(op, opts = {}) {
         throw new Error('A limited session signs execute or executeBatch.');
       }
     }
-    return { op: { ...op, signature: packed }, signer: 'session', session: session.address, userOpHash: hash };
+    const signed = { ...op, signature: packed };
+    rememberSigned(signed, hash);
+    return { op: signed, signer: 'session', session: session.address, userOpHash: hash };
   }
   if (!owner) {
     throw new Error(
@@ -135,9 +156,14 @@ export async function signUserOp(op, opts = {}) {
         : 'Unlock the owner keystore (or a covering session key) before sign_userop.',
     );
   }
-  const hash = await userOpHashOf({ ...op, signature: '0x' });
-  const sig = personalSign(owner.priv, hash);
-  return { op: { ...op, signature: packSudoSignature(sig) }, signer: 'owner', owner: owner.address, userOpHash: hash };
+  const hash = await userOpHashOf({ ...op, signature: '0x' }, opts.chainId);
+  const held = reserveSpend(op, hash);
+  if (held) throw new Error(held);
+  requireUnlockedOwner();
+  const sig = withPasswordFile((pw) => castSign(keystorePath(), pw, hash, { personal: true }));
+  const signed = { ...op, signature: packSudoSignature(sig) };
+  rememberSigned(signed, hash);
+  return { op: signed, signer: 'owner', owner: owner.address, userOpHash: hash };
 }
 
 export function buildEnableData(session, nonce) {
@@ -168,15 +194,20 @@ export function signEnableMode({ op, chainId, kernel, session, nonce, validAfter
     executor: '0x0000000000000000000000000000000000000000',
     enableData,
   });
-  const enableSig = signHash(owner.priv, digest);
+  requireUnlockedOwner();
+  const enableSig = withPasswordFile((pw) => castSign(keystorePath(), pw, digest, { personal: false }));
   const uohPlaceholder = op;
   return { enableData, digest, enableSig, va, vu, uohPlaceholder, vdata };
 }
 
 export async function attachEnableSignature(op, chainId, kernel, session, nonce) {
+  const denied = policyCheck(op);
+  if (denied) throw new Error(denied);
   const pack = signEnableMode({ op, chainId, kernel, session, nonce });
-  const hash = await userOpHashOf({ ...op, signature: '0x' });
-  const sessionSig = personalSign(session.priv, hash);
+  const hash = await userOpHashOf({ ...op, signature: '0x' }, chainId);
+  const held = reserveSpend(op, hash);
+  if (held) throw new Error(held);
+  const sessionSig = withUnlockedSession((file, pw) => castSign(file, pw, hash, { personal: true }));
   const validatorSig = session.address.replace(/^0x/, '') + strip(sessionSig);
   op.signature = packEnableSignature({
     validAfter: pack.va,
@@ -185,6 +216,7 @@ export async function attachEnableSignature(op, chainId, kernel, session, nonce)
     enableSig: pack.enableSig,
     validatorSig: '0x' + validatorSig,
   });
+  rememberSigned(op, hash);
   return { op, userOpHash: hash, enableData: pack.enableData };
 }
 
@@ -223,6 +255,12 @@ export async function submitUserOp(op, { live = false, dry_run, chain, eoa, excl
   if (empty) throw new Error(empty);
   const rpcChainHex = await jrpc(getRpcUrl(), 'eth_chainId', [], 8000);
   const rpcChainId = Number(rpcChainHex);
+  const claimed = await userOpHashOf({ ...op, signature: '0x' }, chain ?? rpcChainId);
+  const stored = heldSigned(claimed);
+  if (isLive && !stored) {
+    throw new Error('This process has not signed that UserOp. sign_userop keeps the signature here. It is not returned to the chat.');
+  }
+  if (stored) op = stored;
   if (isLive) {
     const g = liveSubmitGuards({
       exclusiveRpc,
@@ -239,7 +277,7 @@ export async function submitUserOp(op, { live = false, dry_run, chain, eoa, excl
   if (nonceNow !== BigInt(op.nonce)) {
     throw new Error(`Nonce changed (draft ${op.nonce}, chain ${nonceNow}). Abort — rebuild and re-sign.`);
   }
-  const hash = await userOpHashOf(op);
+  const hash = await userOpHashOf(op, chain);
   if (isLive) {
     const pol = loadPolicy();
     const p = policyCheck(op, pol);
@@ -247,6 +285,8 @@ export async function submitUserOp(op, { live = false, dry_run, chain, eoa, excl
     if (pol.require_dry_run_first && !sawDryRun(hash)) {
       throw new Error('policy: require_dry_run_first — call submit_userop without live:true first.');
     }
+    const held = reserveSpend(op, hash, pol);
+    if (held) throw new Error(held);
   }
   const sim = await simulateHandleOps(op, from);
   if (!isLive) {
@@ -267,18 +307,21 @@ export async function submitUserOp(op, { live = false, dry_run, chain, eoa, excl
   ]);
   const base = word((block && block.baseFeePerGas) || '0x0');
   const tip = 10n ** 9n;
-  const signed = signEip1559Tx(owner.priv, {
-    chainId: Number(chain),
-    nonce: word(txNonce),
-    maxPriorityFeePerGas: tip,
-    maxFeePerGas: base * 2n + tip,
-    gas: word(gasHex) + 50000n,
-    to: ENTRY_POINT,
-    value: 0n,
-    data: encodeHandleOps(op, from),
-  });
-  const txHash = await jrpc(getRpcUrl(), 'eth_sendRawTransaction', [signed.raw]);
-  return { live: true, userOpHash: hash, txHash, tx: signed.hash };
+  requireUnlockedOwner();
+  const raw = withPasswordFile((pw) =>
+    castMktx(keystorePath(), pw, {
+      chainId: Number(chain),
+      nonce: word(txNonce),
+      maxPriorityFeePerGas: tip,
+      maxFeePerGas: base * 2n + tip,
+      gas: word(gasHex) + 50000n,
+      to: ENTRY_POINT,
+      value: 0n,
+      data: encodeHandleOps(op, from),
+    }),
+  );
+  const txHash = await jrpc(getRpcUrl(), 'eth_sendRawTransaction', [raw]);
+  return { live: true, userOpHash: hash, txHash, tx: keccak256(raw) };
 }
 
 export function opJson(op) {
@@ -294,14 +337,13 @@ export function opJson(op) {
       maxFeePerGas: hex(op.maxFeePerGas),
       maxPriorityFeePerGas: hex(op.maxPriorityFeePerGas),
       paymasterAndData: op.paymasterAndData,
-      signature: op.signature,
+      signature: '0x',
     },
     null,
     2,
   );
 }
 
-void hexBuf;
 void encodeSessionDisableKey;
 
 export function encodeSessionDisableCall(sessionKey) {

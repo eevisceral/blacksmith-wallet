@@ -1,7 +1,7 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { isAddress } from '../onchain-ui/kernel.mjs';
+import { ECDSA_VALIDATOR, isAddress, requiredPrefund } from '../onchain-ui/kernel.mjs';
 import { decodeCallData } from './tools-decode.mjs';
 
 const drySeen = new Set();
@@ -23,6 +23,7 @@ export function loadPolicy() {
       allow_recipients: [],
       require_dry_run_first: true,
       allow_arbitrary_calls: false,
+      allow_unrestricted_session: false,
       path: p,
       missing: true,
     };
@@ -46,6 +47,7 @@ export function loadPolicy() {
     allow_recipients: allow,
     require_dry_run_first: j.require_dry_run_first !== false,
     allow_arbitrary_calls: j.allow_arbitrary_calls === true,
+    allow_unrestricted_session: j.allow_unrestricted_session === true,
     path: p,
     missing: false,
   };
@@ -112,9 +114,19 @@ function innerRecipients(call) {
   return [call.to];
 }
 
+function bi(v) {
+  if (v == null || v === '') return 0n;
+  return BigInt(v);
+}
+
 export function policyCheck(op, policy = loadPolicy()) {
   if (!policy || policy.missing) return 'policy: no policy.json. Copy mcp/policy.example.json and set allow_recipients before signing.';
   if (!policy.allow_recipients.length) return 'policy: allow_recipients is empty. Name every address this agent may pay.';
+  if (policy.max_native_wei == null) {
+    return 'policy: set max_native_wei. It caps ETH out, EntryPoint withdrawTo, and the UserOp prefund.';
+  }
+  const sender = String(op.sender || '').toLowerCase();
+  if (!isAddress(sender)) return 'policy: UserOp sender is missing.';
   const decoded = decodeCallData(op.callData);
   if (decoded.kind !== 'execute' && decoded.kind !== 'executeBatch') {
     return `policy: callData ${decoded.selector || '0x'} is not execute or executeBatch.`;
@@ -129,6 +141,9 @@ export function policyCheck(op, policy = loadPolicy()) {
   const erc = new Map();
   for (const c of calls) {
     native += BigInt(c.value || 0n);
+    const to = String(c.to || '').toLowerCase();
+    if (to === sender) return 'policy: a call to the Kernel itself is refused.';
+    if (to === ECDSA_VALIDATOR.toLowerCase()) return 'policy: a call to the owner validator is refused.';
     const h = String(c.data || '').replace(/^0x/i, '');
     const sel = h.slice(0, 8);
     if (
@@ -145,6 +160,9 @@ export function policyCheck(op, policy = loadPolicy()) {
     if ((sel === TRANSFER_SEL || sel === APPROVE_SEL || sel === INCREASE_SEL) && h.length >= 136) {
       const amt = wordAmt(h, 72);
       const tok = String(c.to).toLowerCase();
+      if (policy.max_erc20[tok] == null) {
+        return `policy: token ${tok} has no max_erc20. Set a cap before transfer, approve, or increaseAllowance.`;
+      }
       erc.set(tok, (erc.get(tok) || 0n) + amt);
     }
     if (sel === WITHDRAW_SEL && h.length >= 136) native += wordAmt(h, 72);
@@ -152,8 +170,9 @@ export function policyCheck(op, policy = loadPolicy()) {
   for (const r of recips) {
     if (!policy.allow_recipients.includes(r)) return `policy: recipient ${r} is not on the allowlist.`;
   }
-  if (policy.max_native_wei != null && native > policy.max_native_wei) {
-    return `policy: native+deposit out ${native} wei exceeds max_native_wei ${policy.max_native_wei}.`;
+  native += requiredPrefund(bi(op.callGasLimit), bi(op.verificationGasLimit), bi(op.preVerificationGas), bi(op.maxFeePerGas));
+  if (native > policy.max_native_wei) {
+    return `policy: native+deposit+prefund ${native} wei exceeds max_native_wei ${policy.max_native_wei}.`;
   }
   for (const [t, amt] of erc) {
     if (policy.max_erc20[t] != null && amt > policy.max_erc20[t]) {
@@ -194,5 +213,97 @@ export function sessionCovers(op, session) {
       .padEnd(8, '0');
     if (sels.length && sel !== '00000000' && !sels.includes(sel)) return `session: selector 0x${sel} not allowed`;
   }
+  return '';
+}
+
+function spendPath() {
+  return join(blacksmithHome(), 'spend.json');
+}
+
+function loadSpend() {
+  try {
+    const j = JSON.parse(readFileSync(spendPath(), 'utf8'));
+    const spent = {};
+    const allow = {};
+    for (const [k, v] of Object.entries(j.spent || {})) spent[k] = BigInt(v);
+    for (const [tok, sp] of Object.entries(j.allow || {})) {
+      allow[tok] = {};
+      for (const [s, v] of Object.entries(sp || {})) allow[tok][s] = BigInt(v);
+    }
+    return { native: BigInt(j.native || 0), spent, allow, ops: { ...(j.ops || {}) } };
+  } catch {
+    return { native: 0n, spent: {}, allow: {}, ops: {} };
+  }
+}
+
+function saveSpend(book) {
+  const spent = {};
+  const allow = {};
+  for (const [k, v] of Object.entries(book.spent)) spent[k] = v.toString();
+  for (const [tok, sp] of Object.entries(book.allow)) {
+    allow[tok] = {};
+    for (const [s, v] of Object.entries(sp)) allow[tok][s] = v.toString();
+  }
+  const path = spendPath();
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, JSON.stringify({ native: book.native.toString(), spent, allow, ops: book.ops }) + '\n', { mode: 0o600 });
+  chmodSync(path, 0o600);
+}
+
+function movement(op) {
+  const decoded = decodeCallData(op.callData);
+  let native = 0n;
+  const spent = [];
+  const allow = [];
+  for (const c of decoded.calls || []) {
+    native += BigInt(c.value || 0n);
+    const h = String(c.data || '').replace(/^0x/i, '');
+    const sel = h.slice(0, 8);
+    if (sel === TRANSFER_SEL && h.length >= 136) spent.push([String(c.to).toLowerCase(), wordAmt(h, 72)]);
+    if ((sel === APPROVE_SEL || sel === INCREASE_SEL) && h.length >= 136) {
+      allow.push([
+        String(c.to).toLowerCase(),
+        ('0x' + h.slice(32, 72)).toLowerCase(),
+        wordAmt(h, 72),
+        sel === APPROVE_SEL ? 'set' : 'add',
+      ]);
+    }
+    if (sel === WITHDRAW_SEL && h.length >= 136) native += wordAmt(h, 72);
+  }
+  native += requiredPrefund(bi(op.callGasLimit), bi(op.verificationGasLimit), bi(op.preVerificationGas), bi(op.maxFeePerGas));
+  return { native, spent, allow };
+}
+
+/** Lifetime ceiling. The same userOpHash is counted once, so a retry does not spend the cap twice. */
+export function reserveSpend(op, userOpHash, policy = loadPolicy()) {
+  const denied = policyCheck(op, policy);
+  if (denied) return denied;
+  const h = String(userOpHash || '').toLowerCase();
+  if (!/^0x[0-9a-f]{64}$/.test(h)) return 'policy: userOpHash is missing.';
+  const book = loadSpend();
+  if (book.ops[h]) return '';
+  const move = movement(op);
+  const nextNative = book.native + move.native;
+  if (nextNative > policy.max_native_wei) {
+    return `policy: lifetime native+prefund ${nextNative} wei exceeds max_native_wei ${policy.max_native_wei}. spend.json holds the running total.`;
+  }
+  for (const [tok, amt] of move.spent) {
+    const next = (book.spent[tok] || 0n) + amt;
+    if (next > policy.max_erc20[tok]) return `policy: lifetime transfer of ${tok} would be ${next}, above max_erc20.`;
+  }
+  for (const [tok, spender, amt, kind] of move.allow) {
+    const cur = (book.allow[tok] && book.allow[tok][spender]) || 0n;
+    const next = kind === 'set' ? amt : cur + amt;
+    if (next > policy.max_erc20[tok]) return `policy: allowance of ${tok} for ${spender} would be ${next}, above max_erc20.`;
+  }
+  book.native = nextNative;
+  for (const [tok, amt] of move.spent) book.spent[tok] = (book.spent[tok] || 0n) + amt;
+  for (const [tok, spender, amt, kind] of move.allow) {
+    if (!book.allow[tok]) book.allow[tok] = {};
+    const cur = book.allow[tok][spender] || 0n;
+    book.allow[tok][spender] = kind === 'set' ? amt : cur + amt;
+  }
+  book.ops[h] = true;
+  saveSpend(book);
   return '';
 }

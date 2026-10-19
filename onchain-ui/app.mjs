@@ -10,7 +10,8 @@ import {
   isAddress,
   isBlockedDest,
 } from './kernel.mjs';
-import { readAccount } from './account.mjs';
+import { readAccount, readAccountAt } from './account.mjs';
+import { glanceCreateLabel, glanceText } from './glance.mjs';
 import {
   $,
   eq,
@@ -18,6 +19,7 @@ import {
   word,
   fmtAmt,
   fmtEth,
+  tokenDecimals,
   short,
   clip,
   esc,
@@ -35,6 +37,7 @@ import {
   getRpcUrl,
   setRpcUrl,
   chooseRpc,
+  probeRpc,
   accountBirth,
   scanAccountLogs,
   scanRangeLogs,
@@ -152,6 +155,117 @@ function paintAlt() {
   el.textContent = addr ? clip(addr) : '';
 }
 
+function chainChoices() {
+  const fork = forkCfg();
+  if (fork && !(provider && provider.baseRpc)) {
+    const id = Number(fork.chainId);
+    return [id === 8453 ? 8453 : 1];
+  }
+  return [1, 8453];
+}
+
+function sessionGlance() {
+  return {
+    aa,
+    deployed,
+    eth: word($('ethBal').dataset.wei || '0x0'),
+    eoaWei,
+    factoryOnChain,
+    rescue: aaRescue,
+    err: '',
+  };
+}
+
+function paintChains() {
+  const box = $('chains');
+  const ids = chainChoices();
+  if (!eoa || ids.length < 2) {
+    box.hidden = true;
+    return;
+  }
+  box.hidden = false;
+  const activeAddr = (aa || '').toLowerCase();
+  for (const id of [1, 8453]) {
+    const row = $('chain' + id);
+    const on = id === chainId;
+    row.hidden = !ids.includes(id);
+    row.classList.toggle('on', on);
+    if (on) row.setAttribute('aria-current', 'true');
+    else row.removeAttribute('aria-current');
+    const g = on ? sessionGlance() : glance[id];
+    const stat = $('chainStat' + id);
+    const btn = $('chainGo' + id);
+    if (!g) {
+      stat.textContent = 'Reading…';
+      btn.hidden = true;
+      btn.textContent = '';
+      continue;
+    }
+    let text = glanceText(g);
+    if (!on && g.aa && activeAddr && g.aa.toLowerCase() !== activeAddr) text += ` · ${clip(g.aa)}`;
+    stat.textContent = text;
+    const label = !on && !g.err && !g.deployed && g.aa && (g.factoryOnChain || g.rescue) ? glanceCreateLabel(CHAINS[id].name, g.rescue) : '';
+    btn.hidden = !label;
+    btn.textContent = label;
+    const noGas = g.eoaWei === 0n;
+    btn.disabled = busy || noGas;
+    btn.title = label && noGas ? 'The owner wallet needs ETH on this chain for the network fee.' : '';
+  }
+}
+
+function otherChainUrls(id) {
+  const custom = (id === chainId ? rpcPaste(id) : localStorage.getItem(LS_RPC + id) || '').trim();
+  const exclusive = custom || (forkCfg() ? '' : alchRpc(alchPaste(), id));
+  return {
+    exclusive: !!exclusive,
+    list: exclusive ? [exclusive] : CHAINS[id].rpcs.slice(),
+  };
+}
+
+async function loadOtherGlance() {
+  const gen = ++glanceGen;
+  const ids = chainChoices();
+  paintChains();
+  if (!eoa || ids.length < 2) return;
+  const other = ids.find((id) => id !== chainId);
+  const { exclusive, list } = otherChainUrls(other);
+  let last = new Error(exclusive ? 'Couldn’t reach that RPC.' : 'Couldn’t reach this network. Paste a custom RPC or an Alchemy key.');
+  for (const url of list) {
+    try {
+      await probeRpc(url, other, !exclusive);
+      if (gen !== glanceGen || !eoa) return;
+      const r = await readAccountAt(eoa, url);
+      if (gen !== glanceGen || !eoa) return;
+      const p = r.picked;
+      glance[other] = {
+        aa: p.aa,
+        deployed: p.deployed,
+        eth: p.aa ? r.eth : 0n,
+        eoaWei: r.eoaWei,
+        factoryOnChain: r.factoryOnChain,
+        rescue: p.rescue,
+        err: '',
+      };
+      paintChains();
+      return;
+    } catch (e) {
+      last = e && e.message === 'wrong chain' ? new Error('That RPC is the wrong network.') : e;
+      if (exclusive) break;
+    }
+  }
+  if (gen !== glanceGen || !eoa) return;
+  glance[other] = {
+    aa: '',
+    deployed: false,
+    eth: 0n,
+    eoaWei: 0n,
+    factoryOnChain: false,
+    rescue: false,
+    err: last.message || 'Couldn’t read this chain.',
+  };
+  paintChains();
+}
+
 function setHint(id, msg) {
   const el = $(id);
   el.textContent = msg || '';
@@ -237,6 +351,7 @@ function setGo() {
   else if (noGas) reason = EMPTY_WALLET;
   else if (!destOk) reason = 'Enter an address to send to.';
   go.title = busy || !go.disabled ? '' : reason;
+  paintChains();
 }
 
 function setChainButtons() {
@@ -270,6 +385,8 @@ let unwatch = () => {};
 let eoa = '';
 let eoaWei = 0n;
 let chainId = 1;
+const glance = { 1: null, 8453: null };
+let glanceGen = 0;
 let aa = '';
 let aaSource = '';
 let aaRescue = false;
@@ -477,7 +594,9 @@ function announced() {
 }
 
 function rpcPaste(id = chainId) {
-  return ($('rpcIn').value || localStorage.getItem(LS_RPC + id) || '').trim();
+  const stored = (localStorage.getItem(LS_RPC + id) || '').trim();
+  if (id !== chainId) return stored;
+  return ($('rpcIn').value || stored).trim();
 }
 
 function alchPaste() {
@@ -486,7 +605,9 @@ function alchPaste() {
 
 function alchOn(id = chainId) {
   if (forkCfg()) return '';
-  return alchPaste() || alchKey(rpcPaste(id));
+  const custom = rpcPaste(id);
+  if (custom) return alchKey(custom);
+  return alchPaste();
 }
 
 function rpcPin(id = chainId) {
@@ -765,6 +886,9 @@ function disconnect() {
   unwatch = () => {};
   forgetPendingTx();
   scanId += 1;
+  glanceGen += 1;
+  glance[1] = null;
+  glance[8453] = null;
   eoa = '';
   aa = '';
   aaSource = '';
@@ -887,6 +1011,7 @@ async function switchChainOnce(id) {
   const wcid = Number(await wallet('eth_chainId', []));
   if (id === chainId && wcid === id && (await rpcMatches(id))) {
     setChainButtons();
+    if (eoa) loadOtherGlance();
     return;
   }
   setStatus('Switching networks…');
@@ -901,7 +1026,7 @@ async function switchChainOnce(id) {
             chainId: cid,
             chainName: CHAINS[id].name,
             nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
-            rpcUrls: [CHAINS[id].rpcs[0]],
+            rpcUrls: [rpcPin(id) || CHAINS[id].rpcs[0]],
             blockExplorerUrls: [explorerOrigin(id)],
           },
         ]);
@@ -919,6 +1044,7 @@ async function switchChainOnce(id) {
     setStatus('Couldn’t switch networks.', 'err');
     return;
   }
+  if (eoa) glance[chainId] = sessionGlance();
   $('rpcIn').value = localStorage.getItem(LS_RPC + id) || '';
   paintPin('rpc', false);
   paintPin('alch', false);
@@ -1033,7 +1159,7 @@ async function readErc20(addr, cur) {
   if (hit) {
     const bal = await call(addr, encodeBalanceOf(aa)).then(word).catch(() => null);
     if (bal == null) return null;
-    const t = { address: addr, name: hit[2] || '', symbol: hit[0], decimals: Number(hit[1]) || 18, bal };
+    const t = { address: addr, name: hit[2] || '', symbol: hit[0], decimals: tokenDecimals(hit[1]), bal };
     rememberTok(cur, t);
     return t;
   }
@@ -1045,12 +1171,11 @@ async function readErc20(addr, cur) {
     balP,
   ]);
   if (bal == null) return null;
-  const d = Number(decRaw);
   const t = {
     address: addr,
     name: nm.trim().slice(0, 48),
     symbol: (sym || addr.slice(0, 6)).slice(0, 12),
-    decimals: d >= 0 && d <= 36 ? d : 18,
+    decimals: tokenDecimals(decRaw),
     bal,
   };
   rememberTok(cur, t);
@@ -1446,6 +1571,8 @@ async function refreshAccount(opts) {
   paintEthUsd();
   $('epBal').textContent = fmtEth(dep);
   $('epBal').dataset.wei = String(dep);
+  if (quiet) paintChains();
+  else loadOtherGlance();
   resetFeeMemo();
   paintSelectAll();
   setGo();
@@ -1642,7 +1769,7 @@ async function refreshAfterSend() {
   try {
     await refreshAccount({ quiet: true });
   } catch {
-    setStatus('Couldn’t refresh balances. Amounts on screen may be old.');
+    setStatus('Couldn’t refresh balances. Amounts on screen may be old.', 'err');
   }
 }
 
@@ -1763,6 +1890,16 @@ $('tabs').onkeydown = (e) => {
 };
 $('c1').onclick = () => switchChain(1).catch((e) => setStatus(e.message, 'err'));
 $('c8453').onclick = () => switchChain(8453).catch((e) => setStatus(e.message, 'err'));
+function createOnChain(id) {
+  const run = async () => {
+    if (id !== chainId) await switchChain(id);
+    if (chainId !== id || !eoa) return;
+    await createKernel();
+  };
+  run().catch((e) => setStatus(e.message || 'Couldn’t deploy the Kernel.', 'err'));
+}
+$('chainGo1').onclick = () => createOnChain(1);
+$('chainGo8453').onclick = () => createOnChain(8453);
 $('addTok').onclick = () => addToken().catch((e) => setStatus(e.message, 'err'));
 $('tokAdd').querySelector('.tok-add-open').onclick = () => paintTokAdd(true);
 $('go').onclick = () => send().catch((e) => setStatus(sendFail(e), 'err'));

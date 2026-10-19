@@ -12,7 +12,7 @@ import {
   requiredPrefund,
 } from '../../onchain-ui/kernel.mjs';
 import { opGas } from '../../onchain-ui/gas.mjs';
-import { TOOLS, callTool, normChain, normAssets, normCalls, planCalls, decodeCallData, normOp, WALLET_URL } from '../tools.mjs';
+import { TOOLS, callTool, normChain, normAssets, normCalls, planCalls, decodeCallData, normOp, WALLET_URL, gatewayUrl } from '../tools.mjs';
 
 const DEST = '0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045';
 const USDC = '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48';
@@ -161,6 +161,9 @@ test('normOp takes objects and JSON, hex or decimal fields', () => {
   assert.equal(op.preVerificationGas, 80000n);
   assert.equal(op.maxFeePerGas, 3n * 10n ** 9n);
   assert.throws(() => normOp('not json'), /JSON/);
+  assert.throws(() => normOp({ ...base, maxFeePerGas: Number.MAX_SAFE_INTEGER + 2 }), /exact integer/);
+  assert.equal(gatewayUrl(1), WALLET_URL);
+  assert.match(gatewayUrl(8453), /\.8453\.w3link\.io\/$/);
   assert.throws(() => normOp({ ...base, sender: '0x123' }), /sender/);
 });
 

@@ -1,5 +1,5 @@
 import { jrpc } from './rpc.mjs';
-import { word } from './util.mjs';
+import { tokenDecimals, word } from './util.mjs';
 
 export const LS_ALCH = 'v1w-alch';
 export const LS_DUST = 'v1w-dust';
@@ -47,7 +47,8 @@ function usdPx(prices) {
 
 export function usdHold(bal, dec, px) {
   if (!px || bal <= 0n) return 0;
-  const d = Number(dec) || 18;
+  const d = tokenDecimals(dec);
+  if (d === 0) return Number(bal) * px;
   const s = bal.toString().padStart(d + 1, '0');
   return Number(`${s.slice(0, -d)}.${s.slice(-d)}`) * px;
 }

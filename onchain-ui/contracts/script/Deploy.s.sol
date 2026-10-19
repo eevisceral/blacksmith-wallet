@@ -9,8 +9,8 @@ contract Deploy is Script {
     uint256 internal constant MAX_RUNTIME = 24576;
     bytes32 internal constant SALT_NS = keccak256("blacksmith-v1-wallet");
     address internal constant PUBLISHED_FACTORY = 0xC1df2Df0C959FE14c453de649591Ac9AD6262Dbf;
-    address internal constant PUBLISHED_HOST = 0x7cdc1A1b2F4C15fa038fEdd9D68f7D9a6ab93586;
-    bytes32 internal constant PUBLISHED_KECCAK = 0x465e4eb2b6ceaddf5c4d50f2569741c63c4c0df313e9f7e113b35554b39a4a6c;
+    address internal constant PUBLISHED_HOST = 0x15f850670574fB03C751B59726d8A1E411161aCD;
+    bytes32 internal constant PUBLISHED_KECCAK = 0x229703c776461c0e1fabdf4b0e5dc995fe83c147b69cfcab8fc9c812b01c0050;
     address internal constant NICK_FACTORY = 0x4e59b44847b379578588920cA78FbF26c0B4956C;
     address internal constant KERNEL_IMPL = 0xd3082872F8B06073A021b4602e022d5A070d7cfC;
     address internal constant ECDSA_VALIDATOR = 0xd9AB5096a832b9ce79914329DAEE236f8Eea0390;
@@ -34,6 +34,30 @@ contract Deploy is Script {
 
     function hostSalt(address[] memory chunks) public pure returns (bytes32) {
         return keccak256(abi.encode(SALT_NS, uint256(1), chunks));
+    }
+
+    function publishedHost() public pure returns (address) {
+        return PUBLISHED_HOST;
+    }
+
+    function publishedKeccak() public pure returns (bytes32) {
+        return PUBLISHED_KECCAK;
+    }
+
+    function publishedFactory() public pure returns (address) {
+        return PUBLISHED_FACTORY;
+    }
+
+    function kernelImpl() public pure returns (address) {
+        return KERNEL_IMPL;
+    }
+
+    function ecdsaValidator() public pure returns (address) {
+        return ECDSA_VALIDATOR;
+    }
+
+    function nickFactory() public pure returns (address) {
+        return NICK_FACTORY;
     }
 
     function factorySalt() public pure returns (bytes32) {

@@ -17,6 +17,18 @@ contract MockKernel {
         (bool ok,) = validator.call(abi.encodeWithSignature("enable(bytes)", data));
         require(ok, "enable");
     }
+
+    function ping() external payable returns (bytes32) {
+        return keccak256("pong");
+    }
+
+    receive() external payable {}
+}
+
+contract RevertingKernel {
+    function initialize(address, bytes calldata) external pure {
+        revert("no");
+    }
 }
 
 contract MockValidator {
@@ -28,22 +40,21 @@ contract MockValidator {
 }
 
 contract AccountFactoryTest is Test {
-    address internal constant IMPL = 0xd3082872F8B06073A021b4602e022d5A070d7cfC;
-    address internal constant VAL = 0xd9AB5096a832b9ce79914329DAEE236f8Eea0390;
-    address internal constant NICK = 0x4e59b44847b379578588920cA78FbF26c0B4956C;
     address internal constant OWNER = 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266;
 
+    Deploy internal pins;
     AccountFactory internal factory;
 
     function setUp() public {
-        vm.etch(IMPL, type(MockKernel).runtimeCode);
-        vm.etch(VAL, type(MockValidator).runtimeCode);
+        pins = new Deploy();
+        vm.etch(pins.kernelImpl(), type(MockKernel).runtimeCode);
+        vm.etch(pins.ecdsaValidator(), type(MockValidator).runtimeCode);
         factory = new AccountFactory();
     }
 
     function test_constantsMatchPinnedKernel() public view {
-        assertEq(factory.IMPLEMENTATION(), IMPL);
-        assertEq(factory.VALIDATOR(), VAL);
+        assertEq(factory.IMPLEMENTATION(), pins.kernelImpl());
+        assertEq(factory.VALIDATOR(), pins.ecdsaValidator());
     }
 
     function test_createAccountPredictableAndIdempotent() public {
@@ -54,9 +65,15 @@ contract AccountFactoryTest is Test {
         assertEq(a, predicted);
         assertGt(a.code.length, 0);
 
-        address impl = address(uint160(uint256(vm.load(a, bytes32(uint256(0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc))))));
-        assertEq(impl, IMPL);
-        assertEq(MockValidator(VAL).ecdsaValidatorStorage(a), OWNER);
+        address impl = address(
+            uint160(
+                uint256(
+                    vm.load(a, bytes32(uint256(0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc)))
+                )
+            )
+        );
+        assertEq(impl, pins.kernelImpl());
+        assertEq(MockValidator(pins.ecdsaValidator()).ecdsaValidatorStorage(a), OWNER);
 
         address b = factory.createAccount(OWNER, 0);
         assertEq(b, a);
@@ -69,8 +86,8 @@ contract AccountFactoryTest is Test {
         assertTrue(a != b);
         factory.createAccount(OWNER, 0);
         factory.createAccount(other, 0);
-        assertEq(MockValidator(VAL).ecdsaValidatorStorage(a), OWNER);
-        assertEq(MockValidator(VAL).ecdsaValidatorStorage(b), other);
+        assertEq(MockValidator(pins.ecdsaValidator()).ecdsaValidatorStorage(a), OWNER);
+        assertEq(MockValidator(pins.ecdsaValidator()).ecdsaValidatorStorage(b), other);
     }
 
     function test_indexSeparatesAccounts() public {
@@ -79,18 +96,18 @@ contract AccountFactoryTest is Test {
         assertTrue(i0 != i1);
         address a1 = factory.createAccount(OWNER, 1);
         assertEq(a1, i1);
-        assertEq(MockValidator(VAL).ecdsaValidatorStorage(a1), OWNER);
+        assertEq(MockValidator(pins.ecdsaValidator()).ecdsaValidatorStorage(a1), OWNER);
         assertTrue(factory.getAccountAddress(OWNER, 0).code.length == 0);
     }
 
     function test_createRevertsIfImplMissing() public {
-        vm.etch(IMPL, "");
+        vm.etch(pins.kernelImpl(), "");
         vm.expectRevert(AccountFactory.MissingKernel.selector);
         factory.createAccount(OWNER, 0);
     }
 
     function test_createRevertsIfValidatorMissing() public {
-        vm.etch(VAL, "");
+        vm.etch(pins.ecdsaValidator(), "");
         vm.expectRevert(AccountFactory.MissingKernel.selector);
         factory.createAccount(OWNER, 0);
     }
@@ -99,8 +116,35 @@ contract AccountFactoryTest is Test {
         address caller = address(0xCA11);
         vm.prank(caller);
         address a = factory.createAccount(OWNER, 0);
-        assertEq(MockValidator(VAL).ecdsaValidatorStorage(a), OWNER);
+        assertEq(MockValidator(pins.ecdsaValidator()).ecdsaValidatorStorage(a), OWNER);
         assertTrue(a != caller);
+    }
+
+    function test_proxyForwardsCallAndValue() public {
+        address a = factory.createAccount(OWNER, 0);
+        vm.deal(address(this), 1 ether);
+        bytes32 got = MockKernel(payable(a)).ping{value: 0.2 ether}();
+        assertEq(got, keccak256("pong"));
+        assertEq(a.balance, 0.2 ether);
+        (bool ok,) = a.call{value: 0.1 ether}("");
+        assertTrue(ok);
+        assertEq(a.balance, 0.3 ether);
+    }
+
+    function test_reinitializeThroughProxyReverts() public {
+        address a = factory.createAccount(OWNER, 0);
+        address val = pins.ecdsaValidator();
+        vm.expectRevert(MockKernel.AlreadyInitialized.selector);
+        MockKernel(payable(a)).initialize(val, abi.encodePacked(address(0xBEEF)));
+        assertEq(MockValidator(val).ecdsaValidatorStorage(a), OWNER);
+    }
+
+    function test_failedInitializeDeploysNothing() public {
+        vm.etch(pins.kernelImpl(), type(RevertingKernel).runtimeCode);
+        address predicted = factory.getAccountAddress(OWNER, 0);
+        vm.expectRevert(AccountFactory.DeployFailed.selector);
+        factory.createAccount(OWNER, 0);
+        assertEq(predicted.code.length, 0);
     }
 
     function test_zeroOwnerReverts() public {
@@ -112,13 +156,13 @@ contract AccountFactoryTest is Test {
 
     function test_publishedFactoryAddress() public {
         _etchNick();
-        Deploy deployer = new Deploy();
-        assertEq(deployer.predictFactory(), 0xC1df2Df0C959FE14c453de649591Ac9AD6262Dbf);
+        assertEq(pins.predictFactory(), pins.publishedFactory());
     }
 
     function test_noOwnerOrSetImplementation() public {
         (bool okOwner,) = address(factory).call(abi.encodeWithSignature("owner()"));
-        (bool okSet,) = address(factory).call(abi.encodeWithSignature("setImplementation(address,bool)", IMPL, false));
+        (bool okSet,) =
+            address(factory).call(abi.encodeWithSignature("setImplementation(address,bool)", pins.kernelImpl(), false));
         assertTrue(!okOwner);
         assertTrue(!okSet);
     }
@@ -140,7 +184,7 @@ contract AccountFactoryTest is Test {
 
     function _etchNick() internal {
         vm.etch(
-            NICK,
+            pins.nickFactory(),
             hex"7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe03601600081602082378035828234f58015156039578182fd5b8082525050506014600cf3"
         );
     }

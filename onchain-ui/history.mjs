@@ -9,7 +9,7 @@ import {
   logTopicAddr,
   topicAddress,
 } from './kernel.mjs';
-import { $, eq, hex, word, fmtAmt, fmtEth, fmtWhen, esc, LS_HIST } from './util.mjs';
+import { $, eq, hex, word, fmtAmt, fmtEth, fmtWhen, esc, tokenDecimals, LS_HIST } from './util.mjs';
 import { jrpc, getRpcUrl, call, decodeStr, pruneFloor, PRUNE_HINT, getLogs, LOGS_LOOKBACK } from './rpc.mjs';
 import { alchTransfers } from './alchemy.mjs';
 
@@ -44,10 +44,10 @@ function histAmt(r) {
   if (!legs.length) return '';
   if (legs.length === 1) {
     const x = legs[0];
-    const n = fmtAmt(BigInt(x.amt || '0'), x.dec || 18, x.sym || '');
+    const n = fmtAmt(BigInt(x.amt || '0'), tokenDecimals(x.dec), x.sym || '');
     return (x.d === 1 ? '+' : '−') + n;
   }
-  return legs.map((x) => `${x.d === 1 ? '+' : '−'}${fmtAmt(BigInt(x.amt || '0'), x.dec || 18, x.sym || '')}`).join(' · ');
+  return legs.map((x) => `${x.d === 1 ? '+' : '−'}${fmtAmt(BigInt(x.amt || '0'), tokenDecimals(x.dec), x.sym || '')}`).join(' · ');
 }
 
 export function renderHist() {
@@ -83,7 +83,7 @@ export function pushHist(hash, picks, dest) {
   const legs = (picks || []).map((p) => ({
     d: -1,
     sym: p.kind === 'ep' ? 'Deposit' : p.label || p.token?.symbol || 'ETH',
-    dec: p.decimals || 18,
+    dec: tokenDecimals(p.decimals),
     amt: String(p.amount),
     p: dest || '',
     k: p.kind === 'tok' ? p.token.address : p.kind,
@@ -246,8 +246,8 @@ async function mergeHistLogsInner(pack, quiet, live, patch) {
       const r = seen.get(k);
       r.legs = legs.map((x) => {
         if (x.k === 'ep') return { d: x.d, sym: 'Deposit', dec: 18, amt: x.amt, p: x.p, k: 'ep' };
-        if (x.k === 'eth') return { d: x.d, sym: x.sym || 'ETH', dec: x.dec || 18, amt: x.amt, p: x.p, k: 'eth' };
-        const m = tokMeta.get(x.k) || tokens.find((t) => eq(t.address, x.k)) || { symbol: x.sym || x.k.slice(0, 6), decimals: x.dec || 18 };
+        if (x.k === 'eth') return { d: x.d, sym: x.sym || 'ETH', dec: tokenDecimals(x.dec), amt: x.amt, p: x.p, k: 'eth' };
+        const m = tokMeta.get(x.k) || tokens.find((t) => eq(t.address, x.k)) || { symbol: x.sym || x.k.slice(0, 6), decimals: tokenDecimals(x.dec) };
         return { d: x.d, sym: m.symbol, dec: m.decimals, amt: x.amt, p: x.p, k: x.k };
       });
     }

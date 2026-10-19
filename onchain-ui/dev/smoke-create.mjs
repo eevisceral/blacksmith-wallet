@@ -9,7 +9,7 @@ import {
   encodeFactoryCreate,
   encodeFactoryGetAccount,
   encodeGetNonce,
-  encodeGetUserOpHash,
+  hashUserOp,
   encodeHandleOps,
   packSudoSignature,
   parseUserOpEventData,
@@ -83,7 +83,7 @@ async function main() {
     paymasterAndData: '0x',
     signature: dummy,
   };
-  const uoh = '0x' + (await jrpc(RPC, 'eth_call', [{ to: ENTRY_POINT, data: encodeGetUserOpHash(op) }, 'latest'])).slice(-64);
+  const uoh = hashUserOp(op, Number(await jrpc(RPC, 'eth_chainId', [])));
   const sig = await jrpc(RPC, 'personal_sign', [uoh, OWNER]);
   op.signature = packSudoSignature(sig);
   const sendHash = await jrpc(RPC, 'eth_sendTransaction', [

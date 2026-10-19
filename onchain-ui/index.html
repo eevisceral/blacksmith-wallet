@@ -60,7 +60,7 @@
     <div class="land-read">
     <section class="land" aria-labelledby="acct-k">
       <h2 id="acct-k" class="kicker">The account</h2>
-      <p class="land-copy">The wallet you connect is the owner, and the only key. That owner has one Kernel address, the same on Ethereum and Base. Each chain has its own balance and its own deployment. Anyone can send to that address before you create the Kernel. Create once on a chain to send from it. The owner wallet pays that transaction.</p>
+      <p class="land-copy">The wallet you connect is the owner, and the only key. Each chain has its own Kernel, its own balance, and its own deployment. The address matches on Ethereum and Base when both use this page's factory. If a row shows another address, pay that one on that chain. Anyone can send to the address shown for a chain before you create the Kernel there. Create once on a chain to send from it. The owner wallet pays that transaction.</p>
       <p class="land-copy">Blacksmith V1 is this Kernel. Connect the same wallet and the balances on that chain are here. This page never has the key. If the wallet is lost, the account cannot be recovered here.</p>
     </section>
 
@@ -116,19 +116,19 @@
         <div class="ask">
           <button type="button" class="ask-sum quiet" aria-expanded="false" aria-controls="ask-3">What happens when I connect?</button>
           <div class="ask-body" id="ask-3" hidden>
-            <p>You see the Kernel for that owner on the chain selected in the header. If it already has code, you can send. If it does not, Create Kernel deploys it. That is a normal transaction from the owner wallet, and that wallet pays the network fee. The address does not change, so anything already sent there is already in the Kernel. If Create Kernel stays off, the factory for new accounts is not on this chain yet. A Kernel that already exists still opens.</p>
+            <p>You see the Kernel for that owner on the chain selected in the header. Each chain shows whether its Kernel is created, how much ETH it holds, and the address when that address differs. Tokens and activity follow the header. If it already has code, you can send. If it does not, Create Kernel deploys it. That is a normal transaction from the owner wallet, and that wallet pays the network fee. Funds already at the address shown for this chain are already in that Kernel. Create Kernel stays off when the owner wallet has no ETH on this chain, when a transaction is still confirming, or when the factory for new accounts is not on this chain yet. A Kernel that already exists still opens.</p>
           </div>
         </div>
         <div class="ask">
           <button type="button" class="ask-sum quiet" aria-expanded="false" aria-controls="ask-4">Which address do people pay?</button>
           <div class="ask-body" id="ask-4" hidden>
-            <p>The address at the top of the asset list. That is the Kernel. Copy that one. The address on the header chip is the owner wallet. A payment to the owner wallet does not arrive in this account.</p>
+            <p>The address at the top of the asset list, on the chain selected in the header. That is the Kernel on this chain. Copy that one. If the other chain's row shows a different address, pay that address on that chain. The address on the header chip is the owner wallet. A payment to the owner wallet does not arrive in this account.</p>
           </div>
         </div>
         <div class="ask">
           <button type="button" class="ask-sum quiet" aria-expanded="false" aria-controls="ask-5">Is my Ethereum balance on Base?</button>
           <div class="ask-body" id="ask-5" hidden>
-            <p>No. The Kernel address is the same on both chains. The balances are not. ETH on Ethereum stays on Ethereum. The header switch reads the other chain. It does not move funds. Create once on each chain you want to send from.</p>
+            <p>No. ETH on Ethereum stays on Ethereum. Each chain has its own balance and its own deployment. The address matches when both chains use this page's factory. If a row shows another address, that is the account on that chain. The header switch opens that chain's tokens and activity. It does not move funds. Create once on each chain you want to send from.</p>
           </div>
         </div>
         <div class="ask">
@@ -200,6 +200,18 @@
         </span>
       </div>
       <p id="aaNote" class="muted"></p>
+      <div id="chains" class="chains" hidden role="group" aria-label="Kernel on Ethereum and Base">
+        <div class="chain-row" id="chain1">
+          <span class="chain-name">Ethereum</span>
+          <span class="chain-stat" id="chainStat1"></span>
+          <button type="button" class="badge quiet chain-go" id="chainGo1" hidden></button>
+        </div>
+        <div class="chain-row" id="chain8453">
+          <span class="chain-name">Base</span>
+          <span class="chain-stat" id="chainStat8453"></span>
+          <button type="button" class="badge quiet chain-go" id="chainGo8453" hidden></button>
+        </div>
+      </div>
       <p id="aaAlt" class="mono muted" hidden></p>
       <button type="button" id="aaAct" class="quiet" hidden disabled aria-describedby="aaNote">Create older Kernel</button>
       <div class="rows" id="assets">

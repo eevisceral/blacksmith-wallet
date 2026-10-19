@@ -6,7 +6,7 @@ import {
   encodeExecute,
   encodeGetAccountAddress,
   encodeGetNonce,
-  encodeGetUserOpHash,
+  hashUserOp,
   encodeHandleOps,
   encodeTransfer,
   packSudoSignature,
@@ -49,7 +49,7 @@ async function main() {
     paymasterAndData: '0x',
     signature: dummy,
   };
-  const hash = '0x' + (await jrpc(RPC, 'eth_call', [{ to: ENTRY_POINT, data: encodeGetUserOpHash(op) }, 'latest'])).slice(-64);
+  const hash = hashUserOp(op, Number(await jrpc(RPC, 'eth_chainId', [])));
   const sig = await jrpc(RPC, 'personal_sign', [hash, ANVIL_EOA]);
   op.signature = packSudoSignature(sig);
   const data = encodeHandleOps(op, ANVIL_EOA);

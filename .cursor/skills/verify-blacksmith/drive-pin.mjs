@@ -5,10 +5,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { chromeArgs, chromeBin } from '../../../onchain-ui/dev/chrome.mjs';
 import { loadRepoEnv } from '../../../onchain-ui/dev/env.mjs';
+import { VERSION_HOST, gatewayUrl } from '../../../onchain-ui/host-pin.mjs';
 import { checkLive, checkRecords } from '../../../onchain-ui/dev/pin-check.mjs';
 
-const HOST = '0x7cdc1a1b2f4c15fa038fedd9d68f7d9a6ab93586';
-const origin = 'https://0x7cdc1A1b2F4C15fa038fEdd9D68f7D9a6ab93586.1.w3link.io';
+const HOST = VERSION_HOST.toLowerCase();
+const origin = gatewayUrl(1).replace(/\/$/, '');
 const outDir = process.argv[2];
 if (!outDir) {
   console.error('usage: node drive-pin.mjs <evidence-dir>');

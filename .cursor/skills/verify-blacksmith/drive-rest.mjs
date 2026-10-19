@@ -124,8 +124,9 @@ const snap = await js(`(async () => {
   const skillOk = connectedSkill.includes('Blacksmith V1 wallet') && connectedSkill.includes(factory) && connectedSkill.includes('(connected account)') && (connectedSkill.includes('(derived from connected)') || connectedSkill.includes('not deployed on this chain'));
   const emptyOk = (activity.emptyText || '').includes('No activity yet. Token transfers, sends from this Kernel, and ETH received with no calldata show up here.');
   const pendHidden = document.getElementById('pendClear')?.hidden === true;
-  const ok = landingOk && copyOnLanding && cleared && pendHidden && emptyOk && !activity.hidden && activity.rows > 0 && activity.localShown && skillOk;
-  return { ok, landingOk, copyOnLanding, connected, max, cleared, pendHidden, emptyOk, activity, skillOk };
+  const chainsHidden = document.getElementById('chains')?.hidden === true;
+  const ok = landingOk && copyOnLanding && cleared && pendHidden && emptyOk && chainsHidden && !activity.hidden && activity.rows > 0 && activity.localShown && skillOk;
+  return { ok, landingOk, copyOnLanding, connected, max, cleared, pendHidden, chainsHidden, emptyOk, activity, skillOk };
 })()`);
 
 if (!snap?.ok) die('rest journeys failed ' + JSON.stringify(snap));

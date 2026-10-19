@@ -11,8 +11,8 @@ Connect wallet replaces the landing with the Kernel address and an ETH balance.
 
 - Open `http://127.0.0.1:8765/`.
 - Choose Connect wallet (`#connectLand`). The header `#connect` is hidden on that landing.
-- After connect, `#connect` is the disconnect chip for the owner wallet. It is not a second Connect button.
-- Questions sit on the landing. Which address do people pay? (`aria-controls="ask-4"`) says people pay the Kernel, not the connected wallet.
+- After connect, `#connect` is the disconnect chip for the owner wallet. It is not a second Connect button. On the disconnected landing it is hidden, except while the SKILL.md tab is open.
+- Questions sit on the landing. Which address do people pay? (`aria-controls="ask-4"`) says people pay the address at the top of the asset list on the selected chain, not the owner chip.
 
 ## Driving it with Chrome DevTools
 
@@ -24,7 +24,7 @@ Preconditions:
 - **Open the page.** Load `http://127.0.0.1:8765/`. The heading reads Your smart account and `#connectLand` is present.
 - **Question.** The same script opens Which address do people pay? before Connect. `#ask-4` is visible and names the Kernel.
 - **Connect.** Run `node .cursor/skills/verify-blacksmith/drive-connect.mjs /tmp/blacksmith-verify-evidence/<run-id>`. The script clicks `#connectLand`.
-- **Proof.** `connect.json` in that directory has `ask` containing `Kernel`, `aa` of length 42, and `bal` not equal to `-`. On the seeded Ethereum fork, `aa` is the Kernel for Anvil account `0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266`. That address is not the expected `#aa` on the live host. Live connect needs an injected wallet. Without one, mark live Connect `verified-unreachable`.
+- **Proof.** `connect.json` in that directory has `ask` containing `Kernel`, `aa` of length 42, and `bal` not equal to `-`. `aa` is `#aa` `title`, the full address. The visible text is shortened. On the seeded Ethereum fork, that title is the Kernel for Anvil account `0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266`. That address is not the expected `#aa` on the live host. Live connect needs an injected wallet. Without one, mark live Connect `verified-unreachable`.
 
 ## Gotchas
 

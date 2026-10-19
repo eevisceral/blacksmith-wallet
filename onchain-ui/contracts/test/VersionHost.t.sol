@@ -7,8 +7,6 @@ import {Deploy} from "../script/Deploy.s.sol";
 
 contract VersionHostTest is Test {
     string internal constant FIXTURE = "<!doctype html><html><body>blacksmith-v1</body></html>";
-    address internal constant PUBLISHED_HOST = 0x7cdc1A1b2F4C15fa038fEdd9D68f7D9a6ab93586;
-    bytes32 internal constant PUBLISHED_KECCAK = 0x465e4eb2b6ceaddf5c4d50f2569741c63c4c0df313e9f7e113b35554b39a4a6c;
     address internal constant NICK_FACTORY = 0x4e59b44847b379578588920cA78FbF26c0B4956C;
 
     Deploy internal deployer;
@@ -20,6 +18,18 @@ contract VersionHostTest is Test {
     function test_pinGuardsMatchAccountFactory() public view {
         deployer.pinGuards();
         assertEq(deployer.create2Factory(), NICK_FACTORY);
+    }
+
+    function test_sixteenChunksAccepted() public {
+        address[] memory chunks = new address[](16);
+        bytes memory expected;
+        for (uint256 i; i < 16; ++i) {
+            bytes memory part = abi.encodePacked(bytes1(0x3c), uint8(i + 1));
+            chunks[i] = deployer.deployChunk(part);
+            expected = bytes.concat(expected, part);
+        }
+        VersionHost host = new VersionHost(chunks);
+        assertEq(bytes(host.html()), expected);
     }
 
     function test_htmlEqualsConcatOfChunkCode() public {
@@ -145,23 +155,25 @@ contract VersionHostTest is Test {
     function test_distHtmlRoundTrip() public {
         bytes memory raw = _requireDist();
         assertNotEq(uint8(raw[0]), 0xef);
-        assertEq(keccak256(raw), PUBLISHED_KECCAK);
+        assertEq(keccak256(raw), deployer.publishedKeccak());
         (bytes[] memory parts,) = _split(raw);
-        assertEq(parts.length, 6);
+        assertGt(parts.length, 0);
+        assertLe(parts.length, 16);
         address[] memory chunks = new address[](parts.length);
         for (uint256 i; i < parts.length; ++i) {
             chunks[i] = deployer.deployChunk(parts[i]);
         }
         VersionHost host = new VersionHost(chunks);
         assertEq(bytes(host.html()), raw);
-        assertEq(keccak256(bytes(host.html())), PUBLISHED_KECCAK);
+        assertEq(keccak256(bytes(host.html())), deployer.publishedKeccak());
     }
 
     function test_create2PredictedHostMatchesPublishedPin() public {
         _etchNickFactory();
         bytes memory raw = _requireDist();
         (bytes[] memory parts, address[] memory predictedChunks) = _split(raw);
-        assertEq(parts.length, 6);
+        assertGt(parts.length, 0);
+        assertLe(parts.length, 16);
         address[] memory chunks = new address[](parts.length);
         for (uint256 i; i < parts.length; ++i) {
             bytes memory initcode = deployer.chunkInitcode(parts[i]);
@@ -174,10 +186,10 @@ contract VersionHostTest is Test {
         bytes memory hostInit = abi.encodePacked(type(VersionHost).creationCode, abi.encode(chunks));
         bytes32 hostSalt = deployer.hostSalt(chunks);
         address hostPredicted = deployer.predict(hostSalt, hostInit);
-        assertEq(hostPredicted, PUBLISHED_HOST);
+        assertEq(hostPredicted, deployer.publishedHost());
         VersionHost host = VersionHost(deployer.deployCreate2(hostSalt, hostInit));
-        assertEq(address(host), PUBLISHED_HOST);
-        assertEq(keccak256(bytes(host.html())), PUBLISHED_KECCAK);
+        assertEq(address(host), deployer.publishedHost());
+        assertEq(keccak256(bytes(host.html())), deployer.publishedKeccak());
         assertNotEq(uint8(bytes(host.html())[0]), 0xef);
     }
 
@@ -188,7 +200,7 @@ contract VersionHostTest is Test {
         vm.chainId(8453);
         address base = _predictHost(raw);
         assertEq(ethereum, base);
-        assertEq(ethereum, PUBLISHED_HOST);
+        assertEq(ethereum, deployer.publishedHost());
     }
 
     function _etchNickFactory() internal {

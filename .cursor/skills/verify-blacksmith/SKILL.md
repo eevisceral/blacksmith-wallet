@@ -5,7 +5,7 @@ description: Drive the Blacksmith V1 wallet page in Chrome against a local Anvil
 
 # Verify Blacksmith
 
-The user surface is the wallet page (`onchain-ui/index.html`). Production is VersionHost `0x7cdc1A1b2F4C15fa038fEdd9D68f7D9a6ab93586` on Ethereum and Base. HTTPS for humans is a 5219 gateway (`https://0x7cdc1A1b2F4C15fa038fEdd9D68f7D9a6ab93586.1.w3link.io/`). A second surface is the stdio MCP. This skill drives the page. It does not broadcast, and it does not start a second Anvil if one is already on the fork port.
+The user surface is the wallet page (`onchain-ui/index.html`). The freeze VersionHost address is `0x15f850670574fB03C751B59726d8A1E411161aCD`. `pin-check.mjs --live` says whether that contract has code on Ethereum and Base. HTTPS for humans is a 5219 gateway (`https://0x15f850670574fB03C751B59726d8A1E411161aCD.1.w3link.io/`). A second surface is the stdio MCP. This skill drives the page. It does not broadcast, and it does not start a second Anvil if one is already on the fork port.
 
 Evidence directory for a run: `/tmp/blacksmith-verify-evidence/<run-id>/`. Cleanup does not delete that directory.
 
@@ -101,7 +101,7 @@ Connect, Send, and Activity rows on the live host need an injected EOA. Without 
 Write under `/tmp/blacksmith-verify-evidence/<run-id>/`.
 
 - `connect.json` has the opened question text, the address shown in `#aa`, and the ETH balance text.
-- `rest.json` has the manual, Max reserve, cleared recipient, activity row count, and connected manual.
+- `rest.json` has the manual, Max reserve, cleared recipient, activity row count, connected manual, and `chainsHidden` true on the one-chain fork.
 - `pin.json` has live factory/host flags, gateway URL, `#hostAddr`, landing title, and skill proof.
 - A screenshot is optional. The address plus the balance text is the proof for connect on the fork, because the address must equal the legacy factory `getAccountAddress` for Anvil account 0 on this fork. That Anvil address is not the live-chain proof.
 

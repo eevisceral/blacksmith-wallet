@@ -10,6 +10,7 @@ import {
   encodeTransfer,
   encodeFactoryCreate,
   requiredPrefund,
+  hashUserOp,
 } from '../../onchain-ui/kernel.mjs';
 import { opGas } from '../../onchain-ui/gas.mjs';
 import { mkdtempSync, writeFileSync } from 'node:fs';
@@ -175,7 +176,10 @@ test('prepare_userop drafts a native send (recorded node)', async () => {
   assert.match(text, /Dry-run UserOp draft/);
   assert.ok(text.includes(encodeExecute(DEST, 5n * 10n ** 17n, '0x')));
   assert.match(text, /"nonce": "0x5"/);
-  assert.match(text, new RegExp(USER_OP_HASH));
+  const drafted = JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1));
+  const localHash = hashUserOp(drafted, 1);
+  assert.match(text, new RegExp(localHash));
+  assert.doesNotMatch(text, new RegExp(USER_OP_HASH.slice(2)));
   {
     const g = opGas(1);
     const prefund = requiredPrefund(g.callGasLimit, g.verificationGasLimit, g.preVerificationGas, 3n * 10n ** 9n);
@@ -323,12 +327,20 @@ test('prepare → owner sign → dry_run submit on recorded RPC', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'bs-rpc-sign-'));
   process.env.BLACKSMITH_HOME = dir;
   process.env.BLACKSMITH_KEYSTORE = join(dir, 'k.json');
-  process.env.BLACKSMITH_KEYSTORE_PASS = 'rpc-sign';
+  const passFile = join(dir, 'passphrase');
+  writeFileSync(passFile, 'rpc-sign\n', { mode: 0o600 });
+  process.env.BLACKSMITH_KEYSTORE_PASS_FILE = passFile;
+  delete process.env.BLACKSMITH_KEYSTORE_PASS;
   writeKeystore('0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80', 'rpc-sign');
   process.env.BLACKSMITH_POLICY = join(dir, 'policy.json');
   writeFileSync(
     process.env.BLACKSMITH_POLICY,
-    JSON.stringify({ max_native_wei: '1000000000000000000', allow_recipients: [DEST], require_dry_run_first: false }),
+    JSON.stringify({
+      max_native_wei: '1000000000000000000',
+      allow_recipients: [DEST],
+      require_dry_run_first: false,
+      allow_unrestricted_session: true,
+    }),
   );
   keystoreUnlock('rpc-sign');
   const draft = await callTool('prepare_userop', {
@@ -344,10 +356,12 @@ test('prepare → owner sign → dry_run submit on recorded RPC', async () => {
   await callTool('session', { action: 'create', unrestricted: true });
   const sessTxt = await callTool('sign_userop', { chain: 1, userOp, signer: 'session' });
   assert.match(sessTxt, /Signed with session/i);
-  assert.match(sessTxt, /0x00000001/);
-  assert.match(signedTxt, /0x00000000/);
+  assert.match(signedTxt, /signature stays in this process/i);
+  assert.doesNotMatch(signedTxt, /0x00000000/);
+  assert.doesNotMatch(sessTxt, /0x00000001/);
   assert.doesNotMatch(signedTxt, /ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80/i);
   const signedOp = JSON.parse(signedTxt.slice(signedTxt.indexOf('{'), signedTxt.lastIndexOf('}') + 1));
+  assert.match(signedTxt, new RegExp(hashUserOp(signedOp, 1)));
   const dry = await callTool('submit_userop', { chain: 1, eoa: EOA, userOp: signedOp });
   assert.match(dry, /Dry-run submit/);
   keystoreLock();

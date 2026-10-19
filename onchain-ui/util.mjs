@@ -9,6 +9,11 @@ export const eq = (a, b) => a && b && a.toLowerCase() === b.toLowerCase();
 export const hex = (n) => '0x' + BigInt(n).toString(16);
 export const word = (h) => BigInt(h && h !== '0x' ? h : '0x0');
 
+export function tokenDecimals(n) {
+  const d = Number(n);
+  return Number.isInteger(d) && d >= 0 && d <= 36 ? d : 18;
+}
+
 export const fmtAmt = (n, d = 18, sym = '', maxFrac = 6) => {
   const ds = Number(d);
   if (!ds) return sym ? `${n} ${sym}` : String(n);

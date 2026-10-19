@@ -15,42 +15,51 @@ import {
   kernelExecImpl,
   kernelBatchImpl,
 } from './kernel.mjs';
-import { jrpc, call, kernelImpl, getRpcUrl } from './rpc.mjs';
+import { jrpc, kernelImpl, getRpcUrl } from './rpc.mjs';
 import { word } from './util.mjs';
 
-async function funds(addr) {
+function ethCall(url, to, data) {
+  return jrpc(url, 'eth_call', [{ to, data }, 'latest']);
+}
+
+async function funds(url, addr) {
   if (!addr) return { eth: 0n, deposit: 0n };
   const [ethHex, depHex] = await Promise.all([
-    jrpc(getRpcUrl(), 'eth_getBalance', [addr, 'latest']),
-    call(ENTRY_POINT, encodeBalanceOf(addr)),
+    jrpc(url, 'eth_getBalance', [addr, 'latest']),
+    ethCall(url, ENTRY_POINT, encodeBalanceOf(addr)),
   ]);
   return { eth: word(ethHex), deposit: word(depHex) };
 }
 
-async function predicted(factoryOn, factory, data) {
+async function predicted(url, factoryOn, factory, data) {
   if (!factoryOn) return '';
-  const addr = accountFromWord(await call(factory, data));
+  const addr = accountFromWord(await ethCall(url, factory, data));
   if (!addr) throw new Error('Could not read the account address from the chain.');
   return addr;
 }
 
 export async function readAccount(eoa) {
+  return readAccountAt(eoa, getRpcUrl());
+}
+
+export async function readAccountAt(eoa, url) {
+  if (!url) throw new Error('No RPC URL.');
   const [eoaHex, factoryCode, legacyFactoryCode] = await Promise.all([
-    jrpc(getRpcUrl(), 'eth_getBalance', [eoa, 'latest']),
-    jrpc(getRpcUrl(), 'eth_getCode', [ACCOUNT_FACTORY, 'latest']),
-    jrpc(getRpcUrl(), 'eth_getCode', [KERNEL_FACTORY, 'latest']),
+    jrpc(url, 'eth_getBalance', [eoa, 'latest']),
+    jrpc(url, 'eth_getCode', [ACCOUNT_FACTORY, 'latest']),
+    jrpc(url, 'eth_getCode', [KERNEL_FACTORY, 'latest']),
   ]);
   const factoryOnChain = hasCode(factoryCode);
   const legacyFactoryOn = hasCode(legacyFactoryCode);
   const [legacyAddr, ourAddr] = await Promise.all([
-    predicted(legacyFactoryOn, KERNEL_FACTORY, encodeGetAccountAddress(eoa)),
-    predicted(factoryOnChain, ACCOUNT_FACTORY, encodeFactoryGetAccount(eoa)),
+    predicted(url, legacyFactoryOn, KERNEL_FACTORY, encodeGetAccountAddress(eoa)),
+    predicted(url, factoryOnChain, ACCOUNT_FACTORY, encodeFactoryGetAccount(eoa)),
   ]);
   const [legacyCode, legacyFunds, ourCode, ourFunds] = await Promise.all([
-    legacyAddr ? jrpc(getRpcUrl(), 'eth_getCode', [legacyAddr, 'latest']) : '0x',
-    funds(legacyAddr),
-    ourAddr ? jrpc(getRpcUrl(), 'eth_getCode', [ourAddr, 'latest']) : '0x',
-    funds(ourAddr),
+    legacyAddr ? jrpc(url, 'eth_getCode', [legacyAddr, 'latest']) : '0x',
+    funds(url, legacyAddr),
+    ourAddr ? jrpc(url, 'eth_getCode', [ourAddr, 'latest']) : '0x',
+    funds(url, ourAddr),
   ]);
   const picked = pickAccount({
     legacyAddr,
@@ -67,7 +76,7 @@ export async function readAccount(eoa) {
   let execOk = false;
   let batch = false;
   if (picked.deployed) {
-    impl = await kernelImpl(picked.aa);
+    impl = await kernelImpl(picked.aa, url);
     execOk = kernelExecImpl(impl);
     batch = kernelBatchImpl(impl);
   }

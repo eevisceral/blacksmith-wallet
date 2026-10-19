@@ -14,7 +14,7 @@ import {
   encodeFactoryGetAccount,
   encodeGetAccountAddress,
   encodeGetNonce,
-  encodeGetUserOpHash,
+  hashUserOp,
   encodeHandleOps,
   encodeIsAllowedImplementation,
   encodeTransfer,
@@ -167,7 +167,7 @@ async function sendOp(aa, owner, callData, nCalls) {
   const op = buildOp(aa, nonce, callData, nCalls, f);
   const dummySim = await simulateHandleOps(op, owner);
   if (dummySim.ok) fail('dummy signature must fail simulate');
-  const uoh = '0x' + (await jrpc(RPC, 'eth_call', [{ to: ENTRY_POINT, data: encodeGetUserOpHash(op) }, 'latest'])).slice(-64);
+  const uoh = hashUserOp(op, Number(await jrpc(RPC, 'eth_chainId', [])));
   op.signature = packSudoSignature(await jrpc(RPC, 'personal_sign', [uoh, owner]));
   const sim = await simulateHandleOps(op, owner);
   if (!sim.ok) fail('simulate handleOps failed: ' + sim.message);
@@ -296,7 +296,7 @@ async function main() {
   if (missingPrefund(0n, 0n, 0n, 0n, need) !== 'prefund') fail('missingPrefund token-only empty');
   const nonce0 = word(await jrpc(RPC, 'eth_call', [{ to: ENTRY_POINT, data: encodeGetNonce(aa21) }, 'latest']));
   const dry = buildOp(aa21, nonce0, encodeExecute(USDC, 0n, encodeTransfer(DEST, 1n)), 1, f);
-  const uoh0 = '0x' + (await jrpc(RPC, 'eth_call', [{ to: ENTRY_POINT, data: encodeGetUserOpHash(dry) }, 'latest'])).slice(-64);
+  const uoh0 = hashUserOp(dry, Number(await jrpc(RPC, 'eth_chainId', [])));
   dry.signature = packSudoSignature(await jrpc(RPC, 'personal_sign', [uoh0, owners.aa21]));
   const drySim = await simulateHandleOps(dry, owners.aa21);
   if (drySim.ok) fail('token-only with 0 ETH and 0 deposit must fail simulate');

@@ -11,6 +11,7 @@ import {
   PAGE_HOST,
   CHAINS,
 } from '../kernel.mjs';
+import { PAGE_KECCAK, VERSION_HOST } from '../host-pin.mjs';
 import { jrpc } from '../rpc.mjs';
 import { loadRepoEnv } from './env.mjs';
 
@@ -57,14 +58,14 @@ export function checkRecords() {
   const pin = publishedFromSol(deploySrc);
   const impl = grab(factorySrc, /IMPLEMENTATION = (0x[0-9a-fA-F]{40})/, 'AccountFactory.IMPLEMENTATION');
   const val = grab(factorySrc, /VALIDATOR = (0x[0-9a-fA-F]{40})/, 'AccountFactory.VALIDATOR');
-  const testK = grab(testSrc, /PUBLISHED_KECCAK = (0x[0-9a-fA-F]{64})/, 'test keccak').toLowerCase();
-  const testH = grab(testSrc, /PUBLISHED_HOST = (0x[0-9a-fA-F]{40})/, 'test host');
   const testN = grab(testSrc, /NICK_FACTORY = (0x[0-9a-fA-F]{40})/, 'test nick');
+  const toolsSrc = readFileSync(join(root, 'mcp/tools.mjs'), 'utf8');
+  const driveSrc = readFileSync(join(root, '.cursor/skills/verify-blacksmith/drive-pin.mjs'), 'utf8');
 
   const want = [
     ['factory', pin.factory, ACCOUNT_FACTORY],
-    ['host keccak vs test', pin.keccak, testK],
-    ['host vs test', pin.host, testH],
+    ['host vs host-pin', pin.host, VERSION_HOST],
+    ['keccak vs host-pin', pin.keccak, PAGE_KECCAK],
     ['nick', pin.nick, NICK],
     ['nick vs test', pin.nick, testN],
     ['impl vs factory', pin.impl, impl],
@@ -77,6 +78,28 @@ export function checkRecords() {
     if (normAddr(a) !== normAddr(b)) throw new Error(name + ' ' + a + ' != ' + b);
   }
   if (PAGE_HOST !== '') throw new Error('PAGE_HOST must be empty; the contract address comes from the URL');
+  if (!testSrc.includes('deployer.publishedHost()') || !testSrc.includes('deployer.publishedKeccak()')) {
+    throw new Error('VersionHost test must read Deploy.publishedHost() and publishedKeccak()');
+  }
+  if (testSrc.toLowerCase().includes(pin.host.toLowerCase()) || testSrc.toLowerCase().includes(pin.keccak.toLowerCase())) {
+    throw new Error('VersionHost test must not copy the host or the keccak');
+  }
+  if (toolsSrc.toLowerCase().includes(pin.host.toLowerCase())) {
+    throw new Error('mcp/tools.mjs must import the host pin, not copy the address');
+  }
+  if (driveSrc.toLowerCase().includes(pin.host.toLowerCase())) {
+    throw new Error('drive-pin.mjs must import VERSION_HOST, not copy the host address');
+  }
+  const prose = [
+    ['README', readme],
+    ['AGENTS', readFileSync(join(root, 'AGENTS.md'), 'utf8')],
+    ['verify skill', readFileSync(join(root, '.cursor/skills/verify-blacksmith/SKILL.md'), 'utf8')],
+    ['pin feature', readFileSync(join(root, '.cursor/skills/verify-blacksmith/features/pin.md'), 'utf8')],
+    ['verify features', readFileSync(join(root, '.cursor/skills/verify-blacksmith/features/README.md'), 'utf8')],
+  ];
+  for (const [label, text] of prose) {
+    if (!text.toLowerCase().includes(pin.host.toLowerCase())) throw new Error(label + ' missing host');
+  }
   for (const [label, v] of [
     ['keccak', pin.keccak],
     ['host', pin.host],

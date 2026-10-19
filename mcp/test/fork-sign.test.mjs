@@ -20,7 +20,10 @@ test('fork prepare → sign → dry_run submit (skipped without FORK_RPC)', asyn
   const dir = mkdtempSync(join(tmpdir(), 'bs-fork-'));
   process.env.BLACKSMITH_HOME = dir;
   process.env.BLACKSMITH_KEYSTORE = join(dir, 'keystore.json');
-  process.env.BLACKSMITH_KEYSTORE_PASS = 'fork-test';
+  const passFile = join(dir, 'passphrase');
+  writeFileSync(passFile, 'fork-test\n', { mode: 0o600 });
+  process.env.BLACKSMITH_KEYSTORE_PASS_FILE = passFile;
+  delete process.env.BLACKSMITH_KEYSTORE_PASS;
   writeKeystore(ANVIL, 'fork-test');
   process.env.BLACKSMITH_POLICY = join(dir, 'policy.json');
   writeFileSync(

@@ -3,5 +3,6 @@
   "max_erc20": {},
   "allow_recipients": ["0x0000000000000000000000000000000000000001"],
   "allow_arbitrary_calls": false,
+  "allow_unrestricted_session": false,
   "require_dry_run_first": true
 }

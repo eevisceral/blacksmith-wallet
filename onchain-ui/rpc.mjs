@@ -191,18 +191,20 @@ let rpcDeep = false;
 
 export const rpcHasDeepLogs = () => rpcDeep;
 
-export async function chooseRpc(id, custom, publics) {
+export async function probeRpc(url, id, logs) {
   const want = hex(id).toLowerCase();
-  const ok = async (u, logs) => {
-    const cid = await jrpc(u, 'eth_chainId', [], 8000);
-    if (String(cid).toLowerCase() !== want) throw new Error('wrong chain');
-    await jrpc(u, 'eth_getBalance', [ZERO_ADDR, 'latest'], 8000);
-    if (logs) {
-      const bn = Number(await jrpc(u, 'eth_blockNumber', [], 8000));
-      await jrpc(u, 'eth_getLogs', [{ fromBlock: hex(bn), toBlock: hex(bn), topics: [TRANSFER_TOPIC] }], 12000);
-    }
-    return u;
-  };
+  const cid = await jrpc(url, 'eth_chainId', [], 8000);
+  if (String(cid).toLowerCase() !== want) throw new Error('wrong chain');
+  await jrpc(url, 'eth_getBalance', [ZERO_ADDR, 'latest'], 8000);
+  if (logs) {
+    const bn = Number(await jrpc(url, 'eth_blockNumber', [], 8000));
+    await jrpc(url, 'eth_getLogs', [{ fromBlock: hex(bn), toBlock: hex(bn), topics: [TRANSFER_TOPIC] }], 12000);
+  }
+  return url;
+}
+
+export async function chooseRpc(id, custom, publics) {
+  const ok = (u, logs) => probeRpc(u, id, logs);
   const deepAt = DEEP_BLOCK[id] || 0;
   const deepOk = async (u) => {
     if (!deepAt) return false;

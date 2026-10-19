@@ -3,6 +3,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { BUN_PIN } from './bun-pin.mjs';
+import { PAGE_BYTES, PAGE_CHUNKS, PAGE_KECCAK, VERSION_HOST } from './host-pin.mjs';
+import { keccak256 } from '../mcp/eth-crypto.mjs';
 
 const dir = dirname(fileURLToPath(import.meta.url));
 const dist = join(dir, 'dist');
@@ -18,7 +20,7 @@ function requirePinnedBun() {
   const v = bunVersion();
   if (v !== BUN_PIN) {
     throw new Error(
-      `freeze minify needs bun ${BUN_PIN} (got ${v || 'missing'}). CI and .bun-version pin this; do not RESTAMP with another bun.`,
+      `freeze minify needs bun ${BUN_PIN} (got ${v || 'missing'}). CI and .bun-version pin this; do not build the freeze with another bun.`,
     );
   }
 }
@@ -263,27 +265,92 @@ const parts = [];
 for (let i = 0; i < n; i++) parts.push(Buffer.from(html).subarray(i * max, (i + 1) * max));
 if (Buffer.concat(parts).compare(Buffer.from(html)) !== 0) throw new Error('chunk concat != html');
 
-if (html !== prev && process.env.RESTAMP !== '1') {
-  console.log(`working page builds, ${bytes} B, ${n} chunks. Committed pin left in place.`);
-} else if (html !== prev) {
+function predict(htmlPath) {
+  const forge = spawnSync(
+    'forge',
+    ['script', 'script/Deploy.s.sol:Deploy', '--sig', 'predictFromDist()', '--offline', '-vv'],
+    { cwd: join(dir, 'contracts'), encoding: 'utf8' },
+  );
+  const out = `${forge.stdout || ''}\n${forge.stderr || ''}`;
+  if (forge.status !== 0) throw new Error(out || 'forge predictFromDist failed');
+  const host = out.match(/host: address (0x[0-9a-fA-F]{40})/);
+  const k = out.match(/pageKeccak: bytes32 (0x[0-9a-fA-F]{64})/);
+  const chunks = out.match(/nChunks: uint256 (\d+)/);
+  if (!host || !k || !chunks) throw new Error('forge predictFromDist returned no pin\n' + out);
+  const keccak = keccak256(readFileSync(htmlPath)).toLowerCase();
+  if (k[1].toLowerCase() !== keccak) throw new Error('forge keccak != file keccak');
+  return { host: host[1], keccak, chunks: Number(chunks[1]), bytes: readFileSync(htmlPath).length };
+}
+
+function writeHostPin(pin) {
+  writeFileSync(
+    join(dir, 'host-pin.mjs'),
+    `export const VERSION_HOST = '${pin.host}';\n` +
+      `export const PAGE_KECCAK = '${pin.keccak}';\n` +
+      `export const PAGE_BYTES = ${pin.bytes};\n` +
+      `export const PAGE_CHUNKS = ${pin.chunks};\n\n` +
+      `export function gatewayUrl(chain) {\n` +
+      `  const label = chain === 8453 ? '8453' : '1';\n` +
+      `  return \`https://\${VERSION_HOST}.\${label}.w3link.io/\`;\n` +
+      `}\n`,
+  );
+}
+
+function replacePin(text) {
+  return text
+    .replaceAll(VERSION_HOST, pinHost)
+    .replaceAll(VERSION_HOST.toLowerCase(), pinHost.toLowerCase())
+    .replaceAll(PAGE_KECCAK, pinKeccak)
+    .replaceAll(PAGE_KECCAK.toLowerCase(), pinKeccak)
+    .replaceAll(`**${PAGE_CHUNKS}** EIP-170 chunks`, `**${pinChunks}** EIP-170 chunks`)
+    .replaceAll(`**${PAGE_BYTES}** B`, `**${pinBytes}** B`);
+}
+
+let pinHost = VERSION_HOST;
+let pinKeccak = PAGE_KECCAK;
+let pinChunks = PAGE_CHUNKS;
+let pinBytes = PAGE_BYTES;
+
+if (html !== prev) {
   writeFileSync(distHtml, html);
-  const forge = spawnSync('forge', ['test', '--match-test', 'test_distHtmlRoundTrip', '-vv'], {
-    cwd: join(dir, 'contracts'),
-    encoding: 'utf8',
-  });
-  if (forge.error && forge.error.code === 'ENOENT') {
-    throw new Error('forge required after RESTAMP to verify dist html() round-trip');
+  try {
+    const pin = predict(distHtml);
+    pinHost = pin.host;
+    pinKeccak = pin.keccak;
+    pinChunks = pin.chunks;
+    pinBytes = pin.bytes;
+    writeHostPin(pin);
+    const deployPath = join(dir, 'contracts/script/Deploy.s.sol');
+    writeFileSync(
+      deployPath,
+      readFileSync(deployPath, 'utf8')
+        .replace(/PUBLISHED_HOST = 0x[0-9a-fA-F]{40}/, `PUBLISHED_HOST = ${pin.host}`)
+        .replace(/PUBLISHED_KECCAK = 0x[0-9a-fA-F]{64}/, `PUBLISHED_KECCAK = ${pin.keccak}`),
+    );
+    for (const rel of [
+      '../README.md',
+      '../AGENTS.md',
+      '../.cursor/skills/verify-blacksmith/SKILL.md',
+      '../.cursor/skills/verify-blacksmith/features/README.md',
+      '../.cursor/skills/verify-blacksmith/features/pin.md',
+    ]) {
+      const p = join(dir, rel);
+      writeFileSync(p, replacePin(readFileSync(p, 'utf8')));
+    }
+    console.log('wrote', distHtml, pin.bytes, 'bytes', pin.chunks, 'chunks', pin.keccak, pin.host);
+  } catch (e) {
+    if (prev) writeFileSync(distHtml, prev);
+    throw e;
   }
-  if (forge.status !== 0) {
-    throw new Error((forge.stdout || '') + (forge.stderr || forge.error || ''));
-  }
-  console.log('wrote', distHtml, bytes, 'bytes', `(${n} chunk${n === 1 ? '' : 's'} ≤ ${max})`);
 } else {
   console.log('freeze unchanged', bytes, 'bytes', `(${n} chunk${n === 1 ? '' : 's'} ≤ ${max})`);
 }
 {
   const pin = spawnSync(process.execPath, [join(dir, 'dev/pin-check.mjs')], { encoding: 'utf8' });
-  if (pin.status !== 0) {
-    throw new Error((pin.stdout || '') + (pin.stderr || pin.error || ''));
-  }
+  if (pin.status !== 0) throw new Error((pin.stdout || '') + (pin.stderr || pin.error || ''));
+  const forge = spawnSync('forge', ['test', '--match-contract', 'VersionHostTest', '-q'], {
+    cwd: join(dir, 'contracts'),
+    encoding: 'utf8',
+  });
+  if (forge.status !== 0) throw new Error((forge.stdout || '') + (forge.stderr || forge.error || ''));
 }

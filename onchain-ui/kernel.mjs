@@ -1,3 +1,5 @@
+import { keccak256 } from './keccak.mjs';
+
 export const ENTRY_POINT = '0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789';
 export const KERNEL_FACTORY = '0x5de4839a76cf55d0c90e2061ef4386d962E15ae3';
 export const ACCOUNT_FACTORY = '0xC1df2Df0C959FE14c453de649591Ac9AD6262Dbf';
@@ -79,7 +81,7 @@ export function explorerOrigin(chain) {
   return explorerJoin(chain, '');
 }
 
-/** Empty. The page reads its contract address from the URL. */
+/** Empty. The page reads its contract address from the URL. The frozen host lives in host-pin.mjs. */
 export const PAGE_HOST = '';
 
 const SUDO = '00000000';
@@ -477,6 +479,25 @@ export function parseAmt(s, decimals) {
   const [wRaw, fRaw = ''] = t.split('.');
   if (fRaw.length > d) throw new Error('Too many decimal places.');
   return BigInt((wRaw || '0') + (d ? fRaw.padEnd(d, '0') : ''));
+}
+
+/** EntryPoint v0.6 userOpHash. Signature is not an input. Chain id is the operator's chain, not a value a node picked. */
+export function hashUserOp(op, chainId, entryPoint = ENTRY_POINT) {
+  const initRaw = strip(op.initCode || '');
+  const pmRaw = strip(op.paymasterAndData || '');
+  const packed =
+    strip(op.sender).padStart(64, '0') +
+    u256(op.nonce) +
+    strip(keccak256(initRaw ? '0x' + initRaw : '0x')) +
+    strip(keccak256('0x' + strip(op.callData || ''))) +
+    u256(op.callGasLimit) +
+    u256(op.verificationGasLimit) +
+    u256(op.preVerificationGas) +
+    u256(op.maxFeePerGas) +
+    u256(op.maxPriorityFeePerGas) +
+    strip(keccak256(pmRaw ? '0x' + pmRaw : '0x'));
+  const inner = keccak256('0x' + packed);
+  return keccak256('0x' + strip(inner) + strip(entryPoint).padStart(64, '0') + u256(chainId));
 }
 
 export function encodeGetUserOpHash(op) {

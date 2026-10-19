@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -11,20 +11,14 @@ import {
   SESSION_KEY_VALIDATOR,
   encodeExecute,
 } from '../../onchain-ui/kernel.mjs';
-import {
-  keccak256,
-  privateToAddress,
-  personalSign,
-  personalSignHash,
-  recoverAddress,
-  encryptKeystore,
-  decryptKeystore,
-} from '../eth-crypto.mjs';
-import { policyCheck, sessionCovers, markDryRun, sawDryRun, loadPolicy } from '../policy.mjs';
+import { spawnSync } from 'node:child_process';
+import { keccak256, privateToAddress, encryptKeystore } from '../eth-crypto.mjs';
+import { castKeyAddress, castSign } from '../cast-sign.mjs';
+import { policyCheck, reserveSpend, sessionCovers, markDryRun, sawDryRun, loadPolicy } from '../policy.mjs';
 import { emptyOpFields, liveSubmitGuards } from '../aa-sign.mjs';
 import { encodeBatchProof, permissionLeaf } from '../session-merkle.mjs';
 import { writeKeystore, keystoreUnlock, keystoreLock, unlockedOwner } from '../keystore.mjs';
-import { sessionCreate, sessionUnlock, unlockedSession, sessionRevokeLocal } from '../session.mjs';
+import { sessionCreate, sessionUnlock, sessionLock, unlockedSession, sessionRevokeLocal } from '../session.mjs';
 import { TOOLS, callTool, normOp } from '../tools.mjs';
 
 const ANVIL = '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80';
@@ -39,8 +33,23 @@ function home() {
   process.env.BLACKSMITH_KEYSTORE = join(dir, 'keystore.json');
   process.env.BLACKSMITH_SESSIONS = join(dir, 'sessions.json');
   process.env.BLACKSMITH_POLICY = join(dir, 'policy.json');
-  process.env.BLACKSMITH_KEYSTORE_PASS = 'test-pass-not-for-prod';
+  const passFile = join(dir, 'passphrase');
+  writeFileSync(passFile, 'test-pass-not-for-prod\n', { mode: 0o600 });
+  chmodSync(passFile, 0o600);
+  process.env.BLACKSMITH_KEYSTORE_PASS_FILE = passFile;
+  delete process.env.BLACKSMITH_KEYSTORE_PASS;
   return dir;
+}
+
+function allowOwnerSession() {
+  writeFileSync(
+    process.env.BLACKSMITH_POLICY,
+    JSON.stringify({
+      max_native_wei: '1000000000000000000',
+      allow_recipients: [DEST],
+      allow_unrestricted_session: true,
+    }),
+  );
 }
 
 test('tool list is the original seven plus keystore session sign_userop submit_userop (11)', () => {
@@ -59,19 +68,62 @@ test('tool list is the original seven plus keystore session sign_userop submit_u
   ]);
 });
 
-test('keccak and secp256k1: anvil #0 address and recover', () => {
+test('cast signs the anvil key from our keystore, raw and personal', () => {
   assert.equal(privateToAddress(ANVIL), ANVIL_ADDR);
+  const dir = home();
+  const ks = join(dir, 'cast-key.json');
+  const pw = join(dir, 'cast-pw');
+  writeFileSync(ks, JSON.stringify(encryptKeystore(ANVIL, 'cast-pass')) + '\n', { mode: 0o600 });
+  writeFileSync(pw, 'cast-pass', { mode: 0o600 });
+  chmodSync(pw, 0o600);
+  chmodSync(ks, 0o600);
   const h = keccak256(Buffer.from('blacksmith'));
-  const sig = personalSign(ANVIL, h);
-  assert.equal(sig.length, 132);
-  assert.equal(recoverAddress(personalSignHash(h), sig), ANVIL_ADDR);
+  assert.equal(
+    castSign(ks, pw, h, { personal: false }).toLowerCase(),
+    '0x554cf0cec92b8213c1707ef29faac551607ddadbe93589e74ea191eec2f146af2e814ba9a641711d62c769af49d197b0285c4b21593f684808249596fc50469d1c',
+  );
+  assert.equal(
+    castSign(ks, pw, h, { personal: true }).toLowerCase(),
+    '0xab0d164253aed8820880753f57c879e5c778c2f310e38d32fae3fc7902f9091d302ae4a86c865c7955591771cd0b2f9386086f9331e33affc50f3c90c6658e0b1b',
+  );
+  process.env.ETH_PASSWORD = '/no/such/password-file';
+  process.env.BLACKSMITH_IMPORT_KEY = ANVIL;
+  try {
+    assert.equal(castSign(ks, pw, h, { personal: false }).toLowerCase().slice(0, 10), '0x554cf0ce');
+  } finally {
+    delete process.env.ETH_PASSWORD;
+    delete process.env.BLACKSMITH_IMPORT_KEY;
+  }
 });
 
-test('keystore v3 round-trip never exposes the key in JSON address-only', () => {
+test('keystore file has no key bytes and cast refuses a weak or mislabeled file', () => {
+  const dir = home();
   const ks = encryptKeystore(ANVIL, 'pw', ANVIL_ADDR);
-  assert.equal(ks.address, ANVIL_ADDR.slice(2));
-  assert.equal(decryptKeystore(ks, 'pw').toLowerCase(), ANVIL);
-  assert.throws(() => decryptKeystore(ks, 'nope'), /passphrase/);
+  assert.equal(ks.crypto.kdfparams.n, 262144);
+  assert.equal(JSON.stringify(ks).includes(ANVIL.slice(2)), false);
+  const path = join(dir, 'round.json');
+  const pw = join(dir, 'round-pw');
+  writeFileSync(path, JSON.stringify(ks) + '\n', { mode: 0o600 });
+  writeFileSync(pw, 'pw', { mode: 0o600 });
+  chmodSync(pw, 0o600);
+  assert.equal(castKeyAddress(path, pw).toLowerCase(), ANVIL_ADDR);
+  writeFileSync(pw, 'nope', { mode: 0o600 });
+  assert.throws(() => castKeyAddress(path, pw));
+  writeFileSync(pw, 'pw', { mode: 0o600 });
+  const swapped = { ...ks, address: '11'.repeat(20) };
+  writeFileSync(path, JSON.stringify(swapped) + '\n', { mode: 0o600 });
+  assert.throws(() => castKeyAddress(path, pw), /address does not match/);
+  const light = structuredClone(ks);
+  light.crypto.kdfparams.n = 8192;
+  writeFileSync(path, JSON.stringify(light) + '\n', { mode: 0o600 });
+  assert.throws(() => castKeyAddress(path, pw), /N=262144/);
+  for (const [label, arg, ours] of [
+    ['empty', '0x', keccak256('0x')],
+    ['abc', '0x616263', keccak256(Buffer.from('abc'))],
+  ]) {
+    const got = spawnSync('cast', ['keccak', arg], { encoding: 'utf8' }).stdout.trim();
+    assert.equal(ours, got.toLowerCase(), label);
+  }
 });
 
 test('pack sudo / session plugin / enable signatures', () => {
@@ -142,9 +194,9 @@ test('policy gates native, recipients, dry-run flag', () => {
   };
   const pol = loadPolicy();
   assert.match(policyCheck(op, pol), /max_native_wei/);
-  const okOp = { callData: encodeExecute(DEST, 1n, '0x') };
+  const okOp = { sender: AA, callData: encodeExecute(DEST, 1n, '0x') };
   assert.equal(policyCheck(okOp, pol), '');
-  const bad = { callData: encodeExecute(USDC, 1n, '0x') };
+  const bad = { sender: AA, callData: encodeExecute(USDC, 1n, '0x') };
   assert.match(policyCheck(bad, pol), /allowlist/);
   assert.equal(sawDryRun('0xabc'), false);
   markDryRun('0xAbC');
@@ -166,20 +218,37 @@ test('session permission checks (MCP-side)', () => {
     max_native_wei: 10n ** 18n,
     max_erc20: {},
   };
-  assert.match(policyCheck({ callData: delegate }, pol), /execute or executeBatch/);
+  assert.match(policyCheck({ sender: AA, callData: delegate }, pol), /execute or executeBatch/);
   const op1 = encodeExecute(DEST, 0n, '0x').replace(/(0x[0-9a-f]{8}(?:[0-9a-f]{64}){3})[0-9a-f]{64}/i, '$1' + '0'.repeat(63) + '1');
-  assert.match(policyCheck({ callData: op1 }, pol), /operation must be 0/);
+  assert.match(policyCheck({ sender: AA, callData: op1 }, pol), /operation must be 0/);
+  assert.match(policyCheck({ sender: AA, callData: encodeExecute(AA, 0n, '0x') }, pol), /Kernel itself/);
+  const gasDrain = {
+    sender: AA,
+    callData: encodeExecute(DEST, 0n, '0x'),
+    callGasLimit: 1000n,
+    verificationGasLimit: 0n,
+    preVerificationGas: 0n,
+    maxFeePerGas: 2n,
+  };
+  assert.match(policyCheck(gasDrain, { ...pol, max_native_wei: 1000n }), /prefund/);
+  const xfer =
+    '0xa9059cbb' + DEST.slice(2).toLowerCase().padStart(64, '0') + '1'.padStart(64, '0');
+  assert.match(policyCheck({ sender: AA, callData: encodeExecute(USDC, 0n, xfer) }, { ...pol, allow_recipients: [DEST.toLowerCase(), USDC.toLowerCase()] }), /max_erc20/);
   assert.match(sessionCovers({ callData: op1 }, { unrestricted: true }), /operation must be 0/);
   assert.match(policyCheck({ callData: encodeExecute(DEST, 1n, '0x') }, { ...pol, missing: true }), /no policy.json/);
 });
 
 test('keystore unlock TTL + session create without leaking keys', async () => {
   home();
-  writeKeystore(ANVIL, process.env.BLACKSMITH_KEYSTORE_PASS);
+  writeKeystore(ANVIL, 'test-pass-not-for-prod');
+  assert.equal(statSync(process.env.BLACKSMITH_KEYSTORE).mode & 0o777, 0o600);
   const text = await callTool('keystore', { action: 'unlock' });
   assert.match(text, /Unlocked owner/i);
   assert.doesNotMatch(text, /ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80/i);
-  assert.equal(unlockedOwner().address, ANVIL_ADDR);
+  assert.equal(unlockedOwner().address.toLowerCase(), ANVIL_ADDR);
+  assert.equal(unlockedOwner().pass, undefined);
+  assert.equal('priv' in unlockedOwner(), false);
+  allowOwnerSession();
   const created = await callTool('session', { action: 'create', unrestricted: true });
   assert.match(created, /Created session key 0x/i);
   assert.doesNotMatch(created, /private key 0x/i);
@@ -195,9 +264,62 @@ test('keystore unlock TTL + session create without leaking keys', async () => {
 
 test('session create without targets or unrestricted is refused', async () => {
   home();
-  writeKeystore(ANVIL, process.env.BLACKSMITH_KEYSTORE_PASS);
-  keystoreUnlock(process.env.BLACKSMITH_KEYSTORE_PASS);
+  writeKeystore(ANVIL, 'test-pass-not-for-prod');
+  keystoreUnlock('test-pass-not-for-prod');
   await assert.rejects(() => callTool('session', { action: 'create' }), /unrestricted: true/);
+});
+
+test('passphrase file unlocks owner and session without the env var or a tty', async () => {
+  const dir = home();
+  delete process.env.BLACKSMITH_KEYSTORE_PASS;
+  writeKeystore(ANVIL, 'file-pass');
+  const passFile = join(dir, 'passphrase');
+  writeFileSync(passFile, 'file-pass\n', { mode: 0o644 });
+  chmodSync(passFile, 0o644);
+  process.env.BLACKSMITH_KEYSTORE_PASS_FILE = passFile;
+  assert.throws(() => keystoreUnlock(), /mode 0600/);
+  chmodSync(passFile, 0o600);
+  allowOwnerSession();
+  assert.equal(keystoreUnlock().toLowerCase(), ANVIL_ADDR);
+  keystoreLock();
+  const created = await callTool('session', { action: 'create', unrestricted: true });
+  assert.match(created, /Created session key/i);
+  assert.doesNotMatch(created, /file-pass/);
+  sessionUnlock();
+  assert.ok(unlockedSession().address);
+  sessionLock();
+  delete process.env.BLACKSMITH_KEYSTORE_PASS_FILE;
+});
+
+test('lifetime spend stops a second prefund and a stacked increaseAllowance', () => {
+  home();
+  const pol = {
+    missing: false,
+    allow_recipients: [DEST.toLowerCase(), USDC.toLowerCase()],
+    max_native_wei: 2000n,
+    max_erc20: { [USDC.toLowerCase()]: 100n },
+    allow_unrestricted_session: false,
+  };
+  const op = {
+    sender: AA,
+    callData: encodeExecute(DEST, 0n, '0x'),
+    callGasLimit: 1000n,
+    verificationGasLimit: 0n,
+    preVerificationGas: 0n,
+    maxFeePerGas: 1n,
+  };
+  const h1 = '0x' + '11'.repeat(32);
+  const h2 = '0x' + '22'.repeat(32);
+  const h3 = '0x' + '33'.repeat(32);
+  assert.equal(reserveSpend(op, h1, pol), '');
+  assert.equal(reserveSpend(op, h1, pol), '');
+  assert.equal(reserveSpend(op, h2, pol), '');
+  assert.match(reserveSpend(op, h3, pol), /lifetime native/);
+  const inc = (n) =>
+    '0x39509351' + DEST.slice(2).toLowerCase().padStart(64, '0') + BigInt(n).toString(16).padStart(64, '0');
+  const allowOp = { sender: AA, callData: encodeExecute(USDC, 0n, inc(60)) };
+  assert.equal(reserveSpend(allowOp, '0x' + '44'.repeat(32), pol), '');
+  assert.match(reserveSpend({ sender: AA, callData: encodeExecute(USDC, 0n, inc(50)) }, '0x' + '55'.repeat(32), pol), /allowance/);
 });
 
 test('keystore rejects passphrase tool args', async () => {

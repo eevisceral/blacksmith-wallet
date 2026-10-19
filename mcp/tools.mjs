@@ -16,7 +16,7 @@ import {
   encodeWithdrawTo,
   encodeBalanceOf,
   encodeGetNonce,
-  encodeGetUserOpHash,
+  hashUserOp,
   encodeHandleOps,
   encodeCreateAccount,
   encodeFactoryCreate,
@@ -65,8 +65,10 @@ import { signUserOp, submitUserOp, opJson as signedOpJson, attachEnableSignature
 import { loadPolicy } from './policy.mjs';
 import { readAccount, newAccountsWait } from '../onchain-ui/account.mjs';
 import { feesFromBlock, opGas } from '../onchain-ui/gas.mjs';
+import { VERSION_HOST, gatewayUrl } from '../onchain-ui/host-pin.mjs';
 
-export const WALLET_URL = 'https://0x7cdc1A1b2F4C15fa038fEdd9D68f7D9a6ab93586.1.w3link.io/';
+export { gatewayUrl, VERSION_HOST };
+export const WALLET_URL = gatewayUrl(1);
 /** This Kernel's ECDSA validator reverts a bad signature as AA23, not AA24. simulateText treats both as reaching the signature check. */
 const DUMMY65 = PLACEHOLDER_ECDSA;
 const SIG_SUDO = '00000000';
@@ -194,7 +196,7 @@ async function createText(r, eoa, chain) {
     if (!allowed) {
       lines.push('- the older factory no longer allows this implementation. Funds already at this address need that factory. Stop here.');
     }
-    lines.push('', `Or open ${WALLET_URL} — Connect and it offers the older-account create.`);
+    lines.push('', `Or open ${gatewayUrl(chain)} — Connect and it offers the older-account create.`);
     return lines.join('\n');
   }
   if (!r.factoryOnChain) return newAccountsWait(name);
@@ -205,7 +207,7 @@ async function createText(r, eoa, chain) {
     `- to ${ACCOUNT_FACTORY} (permissionless factory)`,
     `- data ${encodeFactoryCreate(eoa)}`,
     '',
-    `Or open ${WALLET_URL} — Connect → Create Kernel.`,
+    `Or open ${gatewayUrl(chain)} — Connect → Create Kernel.`,
   ].join('\n');
 }
 
@@ -252,7 +254,7 @@ async function resolveAccount(a) {
     }
     lines.push(
       '',
-      `Reads are free. Creation is a plain owner-EOA factory transaction. Sends sign here (owner keystore / session keys, policy-gated) via sign_userop + submit_userop, or in the browser wallet: ${WALLET_URL}`,
+      `Reads are free. Creation is a plain owner-EOA factory transaction. Sends sign here (owner keystore / session keys, policy-gated) via sign_userop + submit_userop, or in the browser wallet: ${gatewayUrl(chain)}`,
     );
     return lines.join('\n');
   });
@@ -476,7 +478,7 @@ async function getActivity(a) {
           by.set(k, r);
         }
         const rows = [...by.values()].sort((x, y) => y.block - x.block).slice(0, limit);
-        const lines = [`Activity for ${aa} on ${CHAINS[chain].name}${note} — Alchemy Transfers, newest first, ${rows.length} row${rows.length === 1 ? '' : 's'}`];
+        const lines = [`Activity for ${aa} on ${CHAINS[chain].name}${note} — Alchemy Transfers, transfer legs only, not UserOp success, newest first, ${rows.length} row${rows.length === 1 ? '' : 's'}`];
         for (const r of rows) {
           const amts = r.legs.map((x) => `${x.d === 1 ? '+' : '−'}${fmtAmt(BigInt(x.amt), x.dec, x.sym || (x.k === 'eth' ? 'ETH' : short(x.k)))}`).join(' · ');
           lines.push(`- block ${r.block} · ${rowTitle(r.legs, r.ok)}${amts ? ` (${amts})` : ''} · ${r.hash}`);
@@ -747,7 +749,7 @@ async function prepareUserOp(a) {
       paymasterAndData: '0x',
       signature: packSudoSignature(DUMMY65),
     };
-    const userOpHash = '0x' + (await call(ENTRY_POINT, encodeGetUserOpHash(op))).slice(-64);
+    const userOpHash = hashUserOp(op, chain);
     const sim = a.simulate === false ? '' : await simulateText(op, eoa);
     const lines = [
       `Dry-run UserOp draft — ${aa} on ${name} (Kernel ${r.batch ? '0.2.4' : '0.2.1'}). Unsigned until sign_userop.`,
@@ -774,14 +776,14 @@ async function prepareUserOp(a) {
       'UserOperation v0.6 draft:',
       opJson(op),
       '',
-      `userOpHash: ${userOpHash} — sign_userop packs the signature (session plugin or 0x00000000 ‖ 65-byte owner ECDSA), replacing the placeholder above. The hash does not cover the signature field.`,
+      `userOpHash: ${userOpHash} — packed locally (EntryPoint v0.6). A node cannot substitute this hash. sign_userop packs the signature (session plugin or 0x00000000 ‖ 65-byte owner ECDSA). The hash does not cover the signature field.`,
       '',
       `Prefund ${prefund} wei (${fmtAmt(prefund, 18, 'ETH')}) = (callGas ${gas.callGasLimit} + verification ${gas.verificationGasLimit} + preVerification ${gas.preVerificationGas}) × maxFee ${fmtAmt(fees.maxFeePerGas, 9, 'gwei')}. EntryPoint takes it from the deposit first, then Kernel ETH. The EOA pays the outer handleOps tx gas itself.`,
     );
     if (sim) lines.push('', `Simulation: ${sim}`);
     lines.push(
       '',
-      `Next: sign_userop on this UserOp, then submit_userop (dry_run default). Live handleOps needs live: true plus policy. Human path: ${WALLET_URL}. handleOps to ${ENTRY_POINT}:`,
+      `Next: sign_userop on this UserOp, then submit_userop (dry_run default). Live handleOps needs live: true plus policy. Human path: ${gatewayUrl(chain)}. handleOps to ${ENTRY_POINT}:`,
       encodeHandleOps(op, eoa),
     );
     return lines.join('\n');
@@ -808,6 +810,9 @@ export function decodeCallData(callData) {
 
 function numField(v, label) {
   if (v == null || v === '') return 0n;
+  if (typeof v === 'number' && !Number.isSafeInteger(v)) {
+    throw new Error(`${label} is not an exact integer. Pass a hex string.`);
+  }
   try {
     return BigInt(v);
   } catch {
@@ -919,11 +924,11 @@ async function walletUrl() {
   const here = dirname(fileURLToPath(import.meta.url));
   const dist = join(here, '..', 'onchain-ui', 'dist', 'index.html');
   const lines = [
-    `VersionHost: 0x7cdc1A1b2F4C15fa038fEdd9D68f7D9a6ab93586 (Ethereum and Base)`,
+    `VersionHost: ${VERSION_HOST} (Ethereum and Base)`,
     `Pin: html() keccak at that contract, not a gateway.`,
-    `web3://0x7cdc1A1b2F4C15fa038fEdd9D68f7D9a6ab93586`,
+    `web3://${VERSION_HOST}`,
     `HTTPS (ERC-5219 gateway): ${WALLET_URL}`,
-    `Base: https://0x7cdc1A1b2F4C15fa038fEdd9D68f7D9a6ab93586.8453.w3link.io/`,
+    `Base: ${gatewayUrl(8453)}`,
   ];
   if (existsSync(dist)) lines.push(`Local freeze: ${dist} (same page, opens from disk)`);
   lines.push(
@@ -934,8 +939,8 @@ async function walletUrl() {
 }
 
 function rejectSecrets(a) {
-  if (a && (a.passphrase || a.password || a.private_key || a.mnemonic || a.seed)) {
-    throw new Error('Do not pass secrets as tool arguments. Use BLACKSMITH_KEYSTORE_PASS or keystore-cli.');
+  if (a && (a.passphrase || a.password || a.private_key || a.mnemonic || a.seed || a.secret || a.keystore_pass)) {
+    throw new Error('Do not pass secrets as tool arguments. Use BLACKSMITH_KEYSTORE_PASS_FILE or keystore-cli.');
   }
 }
 
@@ -948,7 +953,10 @@ async function keystoreTool(a) {
     return [
       `Owner keystore ${s.onDisk ? 'on disk' : 'missing'} at ${s.path}`,
       s.address ? `- address ${s.address}` : '- none yet — node mcp/keystore-cli.mjs import',
-      s.unlocked ? `- unlocked until ${new Date(s.until).toISOString()}` : '- locked',
+      s.unlocked ? `- signing allowed until ${new Date(s.until).toISOString()}. The private key is decrypted for each signature and not kept.` : '- locked',
+      process.env.BLACKSMITH_KEYSTORE_PASS
+        ? '- BLACKSMITH_KEYSTORE_PASS is ignored. Use BLACKSMITH_KEYSTORE_PASS_FILE mode 0600.'
+        : '- passphrase file, mode 0600',
       `- policy ${p.missing ? 'not found. Copy mcp/policy.example.json before sign or live submit.' : p.path}`,
     ].join('\n');
   }
@@ -1032,7 +1040,7 @@ async function sessionTool(a) {
       const executeSigned = await attachEnableSignature(executeOp, chain, r.picked.aa, session, sessNonce);
       const batchSigned = await attachEnableSignature(batchOp, chain, r.picked.aa, session, sessNonce + 1n);
       return [
-        'Two enable UserOps. Submit the execute one first, then the executeBatch one. Each installs this session validator for that selector. Kernel reads the validator from the selector, so a batch send fails until the second enable is included.',
+        'Two enable UserOps are signed and held here. Submit the execute hash first, then the executeBatch hash. The signatures are not in this reply.',
         '',
         'execute',
         signedOpJson(executeSigned.op),
@@ -1064,9 +1072,9 @@ async function signUserOpTool(a) {
   const op = normOp(a.userOp);
   const chain = normChain(a.chain);
   return withChain(chain, a, async () => {
-    const signed = await signUserOp(op, { signer: a.signer });
+    const signed = await signUserOp(op, { signer: a.signer, chainId: chain });
     const who = signed.session || signed.owner || signed.signer;
-    return [`Signed with ${signed.signer} ${who}. Key material is not returned.`, '', signedOpJson(signed.op), '', `userOpHash: ${signed.userOpHash}`].join('\n');
+    return [`Signed with ${signed.signer} ${who}. The signature stays in this process. submit_userop uses the userOpHash.`, '', signedOpJson(signed.op), '', `userOpHash: ${signed.userOpHash}`].join('\n');
   });
 }
 
@@ -1275,7 +1283,7 @@ export const TOOLS = [
   {
     name: 'keystore',
     description:
-      'Owner ECDSA keystore: status, unlock (BLACKSMITH_KEYSTORE_PASS / PASS_FILE, never a chat arg), lock. Memory TTL. Import keys with node mcp/keystore-cli.mjs — not this tool.',
+      'Owner ECDSA keystore: status, unlock (BLACKSMITH_KEYSTORE_PASS_FILE, mode 0600), lock. The passphrase is not an environment variable and not a tool argument. Import with node mcp/keystore-cli.mjs.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -1309,7 +1317,7 @@ export const TOOLS = [
   {
     name: 'sign_userop',
     description:
-      'Sign a UserOp v0.6: session key when unlocked and permissions cover the call, else owner sudo if unlocked. Returns the packed signature (0x00000000 sudo or 0x00000001 plugin). Never prints private keys.',
+      'Sign a UserOp v0.6: session key when unlocked and permissions cover the call, else owner sudo if unlocked. The signature stays in this process. submit_userop uses the userOpHash. Never prints private keys.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,

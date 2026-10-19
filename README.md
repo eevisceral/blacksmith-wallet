@@ -37,7 +37,7 @@ node onchain-ui/dev/pin-check.mjs --live  # Nick/Kernel/EntryPoint + host html()
 # python3 -m http.server -d onchain-ui 8765 does not serve repo-root SKILL.md.
 ```
 
-The committed `onchain-ui/dist/index.html` **is** the freeze. `node onchain-ui/build.mjs` requires **bun 1.2.21**, checks that the working page still builds, and leaves that file in place. Set `RESTAMP=1` only when you intend a new pin (`forge` required then). Host CREATE2 is hermetic (`bytecode_hash = "none"`).
+The committed `onchain-ui/dist/index.html` **is** the freeze. `node onchain-ui/build.mjs` requires **bun 1.2.21**, writes that file, and records the keccak and the CREATE2 host in `onchain-ui/host-pin.mjs` and `Deploy.s.sol`. `npm run pin` checks they match the file. Host CREATE2 is hermetic (`bytecode_hash = "none"`).
 
 One Anvil at a time. Ethereum and Base together only in `test:fork` smoke-ui (`:8546` + `baseRpc`).
 
@@ -47,7 +47,7 @@ Connect an injected wallet (EIP-6963, else `window.ethereum`). After Connect, ER
 
 - `onchain-ui/index.html` + `wallet.css` + `app.mjs` + `kernel.mjs` + `account.mjs` + `gas.mjs` — source page (`kernel.mjs` encodes, `account.mjs` resolves, `gas.mjs` sets UserOp gas; the agent imports the same three; do not add `@zerodev/sdk`)
 - `onchain-ui/dest.mjs` — dest / 7702 checks
-- `onchain-ui/dist/index.html` — freeze (`SKILL.md` inlined; **6** EIP-170 chunks / **135600** B)
+- `onchain-ui/dist/index.html` — freeze (`SKILL.md` inlined; **6** EIP-170 chunks / **143682** B)
 - `onchain-ui/contracts/` — `AccountFactory` (permissionless Kernel 0.2.4 CREATE2) + `VersionHost` (`html()` / `request()`)
 - `onchain-ui/dev/` — local fork playground (not in the freeze; serves repo-root `SKILL.md` at `/SKILL.md`)
 - `mcp/` — stdio MCP for agents (resolve / balances / tokens / activity / UserOp drafts — sends or arbitrary calls / UserOp decode / keystore + session keys / sign + policy-gated handleOps; not in the freeze)
@@ -58,13 +58,13 @@ Unbundled `index.html` + `app.mjs` needs a static server (`file://` blocks ES mo
 ## Freeze
 
 ```
-keccak256(utf8(onchain-ui/dist/index.html)) = 0x465e4eb2b6ceaddf5c4d50f2569741c63c4c0df313e9f7e113b35554b39a4a6c
+keccak256(utf8(onchain-ui/dist/index.html)) = 0x229703c776461c0e1fabdf4b0e5dc995fe83c147b69cfcab8fc9c812b01c0050
 ```
 
-VersionHost (CREATE2, Nick factory `0x4e59b44847b379578588920cA78FbF26c0B4956C`; same address on Ethereum and Base):
+VersionHost (CREATE2, Nick factory `0x4e59b44847b379578588920cA78FbF26c0B4956C`; same address on Ethereum and Base). The value is `VERSION_HOST` in `onchain-ui/host-pin.mjs` and `Deploy.PUBLISHED_HOST`. `npm run pin` fails if they differ:
 
 ```
-0x7cdc1A1b2F4C15fa038fEdd9D68f7D9a6ab93586
+0x15f850670574fB03C751B59726d8A1E411161aCD
 ```
 
 AccountFactory (same CREATE2 factory and compiler pin; no owner; live):
@@ -80,6 +80,6 @@ Ethereum factory  0xee74493a0e9e83ad497f21e1498c4f1f8c0e87ad54a8bfd4a30f39bbe249
 Base factory      0xe8407df5815934db315d75e1e70aadac1a0d6316e99f67c79c75b9659fde879b
 ```
 
-The pin is `html()` keccak at that host, not a gateway. Open it as `web3://0x7cdc1A1b2F4C15fa038fEdd9D68f7D9a6ab93586` (Base `:8453`) or via a 5219 HTTPS gateway (`https://0x7cdc1A1b2F4C15fa038fEdd9D68f7D9a6ab93586.1.w3link.io/` / `.8453.w3link.io/`). Gateways call `request()` and may wrap the HTML. VersionHost capacity is 1–16 chunks. `dist/index.html` is the page those commands deploy. Changing it changes the keccak and the host address.
+The pin is `html()` keccak at that host, not a gateway. Open it as `web3://0x15f850670574fB03C751B59726d8A1E411161aCD` (Base `:8453`) or via a 5219 HTTPS gateway (`https://0x15f850670574fB03C751B59726d8A1E411161aCD.1.w3link.io/` / `.8453.w3link.io/`). Gateways call `request()` and may wrap the HTML. VersionHost capacity is 1–16 chunks. `dist/index.html` is the page those commands deploy. Changing it changes the keccak and the host address.
 
-Simulate before `--broadcast`. The wrapper in the Run section is the only documented live path. `Deploy.run` also refuses a wrong page hash, a non-Nick factory, chain id other than 1 or 8453, or missing Kernel/EntryPoint. Pin-check `--live` on the same RPCs first. Do not restamp `dist/` after simulate.
+Simulate before `--broadcast`. The wrapper in the Run section is the only documented live path. `Deploy.run` also refuses a wrong page hash, a non-Nick factory, chain id other than 1 or 8453, or missing Kernel/EntryPoint. Pin-check `--live` on the same RPCs first.

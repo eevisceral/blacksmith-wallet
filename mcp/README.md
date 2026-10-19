@@ -2,7 +2,7 @@
 
 A zero-dependency stdio MCP server for the Blacksmith Kernel wallet (Kernel 0.2.4 / EntryPoint v0.6 on Ethereum and Base). Reads, drafts, **signs UserOps**, and **submits `EntryPoint.handleOps`** under a local policy. MIT, no bundler, no paymaster, no backend.
 
-**Threat model.** Agent hosts are prompt-injection hostile. Private keys, mnemonics, passphrases, and session private keys **never** appear in tool results or logs. Unlock via `BLACKSMITH_KEYSTORE_PASS` (or `BLACKSMITH_KEYSTORE_PASS_FILE` / a TTY when using the CLI) — **not** as a chat-visible tool argument. Memory unlock has a TTL (`BLACKSMITH_UNLOCK_TTL_MS`, default 15 minutes); `keystore` action `lock` wipes it. `submit_userop` is **dry-run unless** `live: true` plus `~/.blacksmith/policy.json` plus an exclusive RPC (tool `rpc` or Alchemy, not the public snapshot).
+**Threat model.** Agent hosts are prompt-injection hostile. Private keys, mnemonics, passphrases, and session private keys never appear in tool results or logs. The owner file is a Web3 secret-storage V3 keystore (scrypt N=262144, r=8, p=1, aes-128-ctr) at mode 0600. That N is geth `StandardScryptN`. `cast wallet new` writes N=8192 and prints the private key, so this wallet does not use it. A file with N=8192 is refused before `cast` is asked to decrypt it. It is not a Foundry keystore. A new file is decrypted once before it is kept, the same check as geth `StoreKey`. Foundry `--account` is only the deploy wrapper (`onchain-ui/dev/deploy.mjs`), which refuses `--private-key`. The passphrase is `BLACKSMITH_KEYSTORE_PASS_FILE` (mode 0600), or on a Mac the login keychain item `blacksmith-v1-keystore` / `owner`. Do not set `BLACKSMITH_KEYSTORE_PASS`. It is ignored. Never pass a secret as a tool argument, and do not put the passphrase in `mcp.json`. Unlock allows signing until `BLACKSMITH_UNLOCK_TTL_MS` (default 15 minutes) and does not keep the private key. Each signature is produced by Foundry `cast` (`wallet sign` and `mktx`) from the keystore file and a mode-0600 password file. The private key is not decrypted in this process. `cast` must be on PATH. `userOpHash` is packed locally from the UserOp and the chain you named. A node cannot substitute the bytes that get signed. `sign_userop` does not return the signature. `submit_userop` broadcasts only a UserOp this process signed. On a Mac, the passphrase can live in the login keychain (`security add-generic-password -s blacksmith-v1-keystore -a owner`) instead of a file. The keychain is still readable by this user. A process running as this user can still read the passphrase file and the key during a signature. Geth does not claim otherwise. `submit_userop` is dry-run unless `live: true` plus `~/.blacksmith/policy.json` plus an exclusive RPC (tool `rpc` or Alchemy, not the public snapshot).
 
 **Signing.** Two first-class paths: an encrypted **owner keystore** (ECDSA-sudo, the same `0x00000000 ‖ 65-byte` packing the wallet uses) and **Kernel v2 session keys** on the EntryPoint v0.6 session-key validator (`0x5C06CE2b673fD5E6e56076e40DD46aB67f5a72A5`). Agents prefer a session key when it is unlocked and covers the call; owner sudo is the fallback. Encoding stays in `onchain-ui/kernel.mjs`. Direct `handleOps` from the owner EOA — the EOA pays outer tx gas.
 
@@ -11,7 +11,7 @@ A zero-dependency stdio MCP server for the Blacksmith Kernel wallet (Kernel 0.2.
 No build — Node 20+ (or bun) and a clone of this repo.
 
 1. `git clone https://github.com/eevisceral/blacksmith-wallet.git`
-2. Optional owner key: `BLACKSMITH_KEYSTORE_PASS=… BLACKSMITH_IMPORT_KEY=0x… node mcp/keystore-cli.mjs import`
+2. Optional owner key. Put the passphrase in a mode-0600 file and the raw key in another, then delete the key file after import. `BLACKSMITH_KEYSTORE_PASS_FILE=~/.blacksmith/passphrase BLACKSMITH_IMPORT_KEY_FILE=~/.blacksmith/import.key node mcp/keystore-cli.mjs import`
 3. Copy `mcp/policy.example.json` to `~/.blacksmith/policy.json` and tighten allowlists.
 4. Add to `~/.cursor/mcp.json`:
 
@@ -22,7 +22,7 @@ No build — Node 20+ (or bun) and a clone of this repo.
       "command": "node",
       "args": ["/absolute/path/blacksmith-wallet/mcp/server.mjs"],
       "env": {
-        "BLACKSMITH_KEYSTORE_PASS": "(unlock only when you intend to sign)",
+        "BLACKSMITH_KEYSTORE_PASS_FILE": "/Users/you/.blacksmith/passphrase",
         "ALCHEMY_API_KEY": "(optional; exclusive JSON-RPC + Portfolio/Transfers like the wallet)"
       }
     }
@@ -30,7 +30,7 @@ No build — Node 20+ (or bun) and a clone of this repo.
 }
 ```
 
-Do not put the passphrase in a chat. Omit `BLACKSMITH_KEYSTORE_PASS` until you need to sign; `keystore` action `unlock` reads the env (or pass file) at call time. Auto-unlock on start is intentionally not a thing.
+Do not put the passphrase in a chat or in this JSON file. `chmod 600` the passphrase file (one line, no extra words). `keystore` action `unlock` reads it at call time. Auto-unlock on start is intentionally not a thing. Unlock keeps the address until the TTL. This process does not hold the private key. A same-user process can still read the passphrase file or the keychain item, and `cast` has the key while a signature runs.
 
 5. Restart the MCP server. Ask: "resolve the Kernel account for EOA 0x… on Base".
 
@@ -58,11 +58,11 @@ Same as the wallet: optional `rpc` is exclusive (no public fall-through). Else a
 
 ## Policy (`~/.blacksmith/policy.json`)
 
-See `mcp/policy.example.json`. A missing file blocks `sign_userop` and live `submit_userop`. `allow_recipients` must list every address (and token contract) the agent may pay. An empty list is refused. `max_native_wei` caps ETH plus EntryPoint `withdrawTo`. `max_erc20` caps `transfer`, `approve`, and `increaseAllowance` per token. Any other inner selector is refused unless `allow_arbitrary_calls` is true. `executeDelegateCall` stays refused. `require_dry_run_first` defaults to true. Override the path with `BLACKSMITH_POLICY`. The example ships with a zero ETH cap and a placeholder recipient. Replace both before a real send.
+See `mcp/policy.example.json`. A missing file blocks `sign_userop`, session enable, and live `submit_userop`. `allow_recipients` must list every address (and token contract) the agent may pay, including the owner EOA if you enable a session key (that UserOp's call is a zero-value execute to the EOA). An empty list is refused. `max_native_wei` is required. It caps ETH, EntryPoint `withdrawTo`, and the UserOp prefund, once per UserOp and again as a lifetime total in `spend.json` (the same `userOpHash` counts once). `max_erc20` is required per token. Transfers accumulate. `approve` sets that spender's allowance. `increaseAllowance` adds to it, and the running allowance cannot pass the cap. A missing cap is a refusal. An unrestricted session key is refused unless `allow_unrestricted_session` is true. Any other inner selector is refused unless `allow_arbitrary_calls` is true. Calls to the Kernel itself and to the ECDSA validator are refused. `executeDelegateCall` stays refused. `require_dry_run_first` defaults to true. Override the path with `BLACKSMITH_POLICY`. The example ships with a zero ETH cap and a placeholder recipient. Replace both before a real send. `sign_userop` does not return the signature. `submit_userop` broadcasts only a UserOp this process signed. The policy check at sign time is the gate. The lifetime total in `spend.json` is not a daily cap.
 
 ## Session keys
 
-`session` `create` stores an encrypted key locally and returns **only** the address. `enable` returns two Kernel **mode 0x00000002** UserOps, execute first and executeBatch second. Each installs the session validator for that selector. A limited session's merkle root is the permission tree. An unrestricted session uses merkle root 0. Later sends use plugin mode `0x00000001`. `revoke` drops local material and can draft `disable(bytes)` via Kernel `execute`.
+`session` `create` stores an encrypted key locally and returns **only** the address. `enable` signs two Kernel mode `0x00000002` UserOps and holds them. The reply shows each `userOpHash` with an empty signature field. Submit the execute hash first, then the executeBatch hash. Each installs the session validator for that selector. A limited session's merkle root is the permission tree. An unrestricted session uses merkle root 0. Later sends use plugin mode `0x00000001`. `revoke` drops local material and can draft `disable(bytes)` via Kernel `execute`.
 
 ## Test
 

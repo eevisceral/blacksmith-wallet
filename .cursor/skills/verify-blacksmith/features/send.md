@@ -1,6 +1,6 @@
 # Send
 
-After connect, To is already the connected wallet. Max checks the ETH row and fills an amount below the Kernel ETH balance. The amount holds back the UserOp prefund and a refund buffer. Deposit can cover the prefund. Tokens pay neither. Send stays disabled until that row is checked, an amount is set, and To is an address.
+After connect, To is already the connected wallet. Max checks the ETH row and fills an amount below the Kernel ETH balance. The amount holds back the UserOp prefund and a refund buffer. Deposit can cover the prefund. Tokens pay neither. Send stays disabled until the Kernel exists on this chain, the owner wallet has ETH, no send is pending, that row is checked, an amount is set, and To is an address. A one-chain fork hides `#chains`. A dual fork shows Ethereum and Base under the Kernel address. `#chainGo1` and `#chainGo8453` create on the other chain. They are hidden on the one-chain playground.
 
 ## Sub-features
 

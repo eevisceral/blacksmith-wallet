@@ -10,6 +10,7 @@ import {
   encodeWithdrawTo,
   encodeGetNonce,
   encodeGetUserOpHash,
+  hashUserOp,
   encodeHandleOps,
   encodeBalanceOf,
   encodeCreateAccount,
@@ -207,16 +208,25 @@ export async function waitTx(hash, opts) {
         }
         if (wantOp) {
           const log = (rec.logs || []).find((l) => eq((l.topics || [])[0], USER_OP_TOPIC));
-          if (log && parseUserOpEventData(log.data)?.ok === false) {
-            writePend('');
-            throw new Error('The Kernel’s UserOp failed. Try a smaller amount.');
+          const parsed = log && parseUserOpEventData(log.data);
+          if (!parsed || parsed.ok !== true) {
+            if (parsed) {
+              writePend('');
+              throw new Error('The Kernel’s UserOp failed. Try a smaller amount.');
+            }
+            writePend(hash);
+            const unread = new Error(
+              'The transaction was included, but this page could not read whether the UserOp ran. Check the explorer before you send again.'
+            );
+            unread.txHash = hash;
+            throw unread;
           }
         }
         writePend('');
         return rec;
       }
     } catch (e) {
-      if (/reverted|UserOp failed|AA2[134]|didn't pay prefund/i.test(e.message || '')) throw e;
+      if (/reverted|UserOp failed|could not read whether the UserOp|AA2[134]|didn't pay prefund/i.test(e.message || '')) throw e;
     }
     await new Promise((r) => setTimeout(r, 2000));
   }
@@ -276,7 +286,11 @@ async function onePhase(callData, nCalls, fees) {
     paymasterAndData: '0x',
     signature: dummy,
   };
-  const hash = '0x' + (await call(ENTRY_POINT, encodeGetUserOpHash(op))).slice(-64);
+  const hash = hashUserOp(op, S.chainId());
+  const nodeHash = '0x' + (await call(ENTRY_POINT, encodeGetUserOpHash(op))).slice(-64);
+  if (hash.toLowerCase() !== nodeHash.toLowerCase()) {
+    throw new Error('This node returned a different UserOp hash than the one computed on this page. The wallet was not asked to sign. Try another RPC.');
+  }
   const eoa = S.eoa();
   const sign = async (method, args) => {
     op.signature = packSudoSignature(await S.wallet(method, args));
@@ -630,14 +644,23 @@ export async function checkPendingReceipt() {
   try {
     const rec = await jrpc(getRpcUrl(), 'eth_getTransactionReceipt', [pendingTx]);
     if (!rec) return;
-    setPendingTx('');
     if (word(rec.status) === 0n) {
+      setPendingTx('');
       S.setStatus('The transaction was included but reverted. Try again.', 'err');
       return;
     }
     const log = (rec.logs || []).find((l) => eq((l.topics || [])[0], USER_OP_TOPIC));
-    if (log && parseUserOpEventData(log.data)?.ok === false) {
-      S.setStatus('The Kernel’s UserOp failed. Try a smaller amount.', 'err');
+    const parsed = log && parseUserOpEventData(log.data);
+    if (!parsed) {
+      S.setStatus(
+        'The transaction was included, but this page could not read whether the UserOp ran. It stays pending here. Check the explorer before you send again.',
+        'err'
+      );
+      return;
     }
-  } catch {}
+    setPendingTx('');
+    if (parsed.ok === false) S.setStatus('The Kernel’s UserOp failed. Try a smaller amount.', 'err');
+  } catch (e) {
+    S.setStatus(e.message || 'Couldn’t read that transaction. It stays pending here.', 'err');
+  }
 }

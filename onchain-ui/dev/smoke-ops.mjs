@@ -11,7 +11,7 @@ import {
   encodeExecuteBatch,
   encodeGetAccountAddress,
   encodeGetNonce,
-  encodeGetUserOpHash,
+  hashUserOp,
   encodeHandleOps,
   encodeTransfer,
   encodeWithdrawTo,
@@ -77,7 +77,7 @@ async function sendOp(aa, owner, callData, nCalls) {
     paymasterAndData: '0x',
     signature: packSudoSignature(DUMMY65),
   };
-  const uoh = '0x' + (await jrpc(RPC, 'eth_call', [{ to: ENTRY_POINT, data: encodeGetUserOpHash(op) }, 'latest'])).slice(-64);
+  const uoh = hashUserOp(op, Number(await jrpc(RPC, 'eth_chainId', [])));
   op.signature = packSudoSignature(await jrpc(RPC, 'personal_sign', [uoh, owner]));
   const txHash = await jrpc(RPC, 'eth_sendTransaction', [
     { from: owner, to: ENTRY_POINT, data: encodeHandleOps(op, owner), value: '0x0' },

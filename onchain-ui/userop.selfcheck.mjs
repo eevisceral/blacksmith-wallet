@@ -24,6 +24,7 @@ import {
   encodeTransfer,
   encodeWithdrawTo,
   encodeGetUserOpHash,
+  hashUserOp,
   encodeHandleOps,
   packSudoSignature,
   parseRpcJson,
@@ -53,7 +54,8 @@ import {
   TRANSFER_TOPIC,
   topicAddress,
 } from './kernel.mjs';
-import { renderMd, fillSkill, esc, short, hex, word, fmtAmt } from './util.mjs';
+import { renderMd, fillSkill, esc, short, hex, word, fmtAmt, tokenDecimals } from './util.mjs';
+import { glanceCreateLabel, glanceText } from './glance.mjs';
 import { decodeStr, logsFrom, getRpcUrl, getRpcAlts, setRpcUrl, archiveLogsMsg, addrRequiredLogsMsg, rangeLogsMsg, pruneFloor, transientRpcMsg, timeoutLogsMsg, unservedLogsMsg, getLogs, call, walkTransfersIn, scanAccountLogs, logSpans, logsProveHistory, TOK_WALK_PUBLIC, TOK_WALK_CUSTOM, LOGS_RANGE_MAX, LOGS_LOOKBACK, LOGS_TIMEOUT_PUBLIC, LOGS_TIMEOUT_CUSTOM } from './rpc.mjs';
 import { keccak256 } from '../mcp/eth-crypto.mjs';
 import { HIST_CAP, HIST_V, HIST_TS } from './history.mjs';
@@ -205,6 +207,11 @@ eq('handleOps selector', HANDLE_OPS_SEL, '1fad948c');
     paymasterAndData: '0x',
     signature: packSudoSignature('0x' + dummy),
   };
+  eq(
+    'hashUserOp matches EntryPoint v0.6 on Ethereum',
+    hashUserOp(op, 1),
+    '0xe7ab6d7ee6ea29d5e673f9ed4711a2d2a6859c9d1b6b177aeeb35b42c8c35f73',
+  );
   eq(
     'encodeGetUserOpHash',
     encodeGetUserOpHash(op),
@@ -1057,6 +1064,40 @@ if (!accountSrc.includes('kernelExecImpl') || !accountSrc.includes('kernelBatchI
   console.error('FAIL reconnect must allow known 0.2.x execute impls');
   process.exit(1);
 }
+if (!accountSrc.includes('readAccountAt') || !app.includes('readAccountAt(eoa, url)')) {
+  console.error('FAIL other-chain read must use an explicit RPC URL');
+  process.exit(1);
+}
+{
+  const glanceFn = app.slice(app.indexOf('async function loadOtherGlance'), app.indexOf('function setHint'));
+  if (!glanceFn.includes('exclusive') || glanceFn.includes('chooseRpc') || glanceFn.includes('setRpcUrl')) {
+    console.error('FAIL other-chain glance must not replace the session RPC');
+    process.exit(1);
+  }
+}
+eq('glance created', glanceText({ deployed: true, eth: 10n ** 18n, aa: '0x11', factoryOnChain: true }), 'Created · 1 ETH');
+eq('glance absent', glanceText({ deployed: false, eth: 0n, aa: '0x11', factoryOnChain: true }), 'Not created');
+eq('glance funded', glanceText({ deployed: false, eth: 10n ** 18n, aa: '0x11', factoryOnChain: true }), 'Not created · 1 ETH');
+eq('glance no factory', glanceText({ deployed: false, eth: 0n, aa: '', factoryOnChain: false }), 'Factory is not on this chain yet.');
+eq('glance err', glanceText({ err: 'down', aa: '' }), 'down');
+eq('glance create', glanceCreateLabel('Base', false), 'Create on Base');
+eq('glance rescue', glanceCreateLabel('Ethereum', true), 'Create older Kernel on Ethereum');
+eq('decimals zero', String(tokenDecimals(0)), '0');
+eq('decimals missing', String(tokenDecimals(undefined)), '18');
+eq('decimals junk', String(tokenDecimals(99)), '18');
+eq('usd zero dec', String(usdHold(100n, 0, 2)), '200');
+if (app.includes('Number(hit[1]) || 18') || app.includes('decimals || 18')) {
+  console.error('FAIL zero decimals must not become 18');
+  process.exit(1);
+}
+if (!/function alchOn[\s\S]{0,220}if \(custom\) return alchKey\(custom\)/.test(app)) {
+  console.error('FAIL a pasted RPC must not keep Alchemy Portfolio on a different node');
+  process.exit(1);
+}
+if (!page.includes('id="chains"') || !page.includes('id="chainGo8453"') || !page.includes('id="chainGo1"')) {
+  console.error('FAIL page must list Ethereum and Base under the Kernel address');
+  process.exit(1);
+}
 if (!app.includes('logs?.clipped') || !app.includes('Showing recent history')) {
   console.error('FAIL public log failover and recent-history copy');
   process.exit(1);
@@ -1145,6 +1186,10 @@ if (app.includes("$('tokMore').onclick = () => refreshAccount()") || app.include
   }
   if (!sendSrc.includes('PLACEHOLDER_ECDSA') || !tools.includes('PLACEHOLDER_ECDSA') || tools.includes("'11'.repeat(64)")) {
     console.error('FAIL the page and the agent must share PLACEHOLDER_ECDSA');
+    process.exit(1);
+  }
+  if (!sendSrc.includes('hashUserOp(') || !sendSrc.includes('The wallet was not asked to sign') || !tools.includes('hashUserOp(')) {
+    console.error('FAIL the page must hash locally and refuse a node hash that disagrees');
     process.exit(1);
   }
   if (!readFileSync(join(dir, '..', 'mcp', 'policy.mjs'), 'utf8').includes('Delegatecall is refused')) {
